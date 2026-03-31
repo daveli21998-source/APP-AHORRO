@@ -14,6 +14,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [pwaStatus, setPwaStatus] = useState('Verificando...');
   const { toast, showToast } = useToast();
   const isSyncingRef = useRef(false);
 
@@ -24,6 +25,7 @@ export default function App() {
       if (data) setClientes(data);
     } catch (err) {
       console.error('Error reloading clientes:', err);
+      setPwaStatus('Error de Carga');
     }
   }, []);
 
@@ -96,6 +98,11 @@ export default function App() {
     // Alerta de PWA lista
     const handleOfflineReady = () => {
       showToast('✅ App lista para usar sin internet', '🚀');
+      setPwaStatus('MODO OFFLINE OK');
+    };
+
+    const handleRegistered = () => {
+        setPwaStatus('Sistema Activo');
     };
 
     runPeriodicWork();
@@ -103,11 +110,13 @@ export default function App() {
     const interval = setInterval(runPeriodicWork, 15000); 
     window.addEventListener('online', triggerSync);
     window.addEventListener('app-offline-ready', handleOfflineReady);
+    window.addEventListener('app-registered', handleRegistered);
     
     return () => {
       clearInterval(interval);
       window.removeEventListener('online', triggerSync);
       window.removeEventListener('app-offline-ready', handleOfflineReady);
+      window.removeEventListener('app-registered', handleRegistered);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); 
@@ -188,6 +197,11 @@ export default function App() {
           {pendingCount > 0 && <span> ({pendingCount} pagos pendientes)</span>}
         </div>
       )}
+
+      {/* Panel de Diagnóstico PWA (Solo visible abajo a la derecha) */}
+      <div style={{ position: 'fixed', bottom: 4, right: 4, fontSize: 8, color: 'var(--text-3)', opacity: 0.5, zIndex: 10000, pointerEvents: 'none' }}>
+        SW: {pwaStatus} | {navigator.onLine ? 'ON' : 'OFF'}
+      </div>
 
       {/* Toast global */}
       <div className={`toast ${toast.visible ? 'visible' : ''}`} role="status" aria-live="polite">

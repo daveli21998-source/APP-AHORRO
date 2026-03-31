@@ -7,12 +7,12 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'APP AHORROS',
         short_name: 'Ahorros',
-        description: 'Aplicación de Gestión de Ahorros con Soporte Offline',
+        description: 'Gestión de Ahorros con Soporte Offline',
         theme_color: '#10b981',
         background_color: '#080d0a',
         display: 'standalone',
@@ -20,12 +20,14 @@ export default defineConfig({
           {
             src: 'favicon.svg',
             sizes: '192x192',
-            type: 'image/svg+xml'
+            type: 'image/svg+xml',
+            purpose: 'any maskable'
           },
           {
             src: 'favicon.svg',
             sizes: '512x512',
-            type: 'image/svg+xml'
+            type: 'image/svg+xml',
+            purpose: 'any maskable'
           }
         ]
       },
