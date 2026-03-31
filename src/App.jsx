@@ -13,19 +13,24 @@ export default function App() {
   const [clienteActivo, setClienteActivo] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const { toast, showToast } = useToast();
+  const isSyncingRef = useRef(false);
 
+  // ─── CARGA DE DATOS ──────────────────────────────────────────
   const reloadClientes = useCallback(async () => {
-    const data = await getClientesConMetaData();
-    setClientes(data);
+    try {
+      const data = await getClientesConMetaData();
+      if (data) setClientes(data);
+    } catch (err) {
+      console.error('Error reloading clientes:', err);
+    }
   }, []);
 
+  // ─── EXPORTACIÓN EXCEL ───────────────────────────────────────
   const handleExportPasaje = async (pasajeNombre, tipo = 'normal') => {
     try {
       showToast(`Generando Excel (${tipo.toUpperCase()}) para ${pasajeNombre}...`, '⏳');
-      // 1. Filtrar clientes de ese lugar que tengan ese tipo de ahorro (o ambos)
       const q = pasajeNombre.trim().toLowerCase();
       const filtrados = clientes.filter(c => {
         const matchLugar = (c.lugar || '').trim().toLowerCase() === q || 
@@ -39,7 +44,6 @@ export default function App() {
         return;
       }
       
-      // 2. Cargar pagos para cada cliente (solo del tipo solicitado)
       const dataFull = await Promise.all(filtrados.map(async c => {
         const todosPagos = await getPagosByCliente(c.id);
         return {
@@ -56,37 +60,13 @@ export default function App() {
     }
   };
 
-  const handleSync = useCallback(async () => {
-    if (isSyncing || !navigator.onLine) return;
-    setIsSyncing(true);
-    try {
-      const { synced, failed } = await syncOfflineData();
-      if (synced > 0) {
-        showToast(`Sincronizados ${synced} pagos pendientes`, '☁️');
-        reloadClientes();
-      }
-      if (failed > 0) {
-        showToast(`No se pudieron sincronizar ${failed} pagos`, '⚠️');
-      }
-    } catch (err) {
-      console.error('Sync error:', err);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [isSyncing, reloadClientes, showToast]);
-
-  const checkPending = useCallback(() => {
-    const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
-    setPendingCount(queue.length);
-  }, []);
-
-  const isSyncingRef = useRef(false);
-
+  // ─── LOGICA DE SINCRONIZACIÓN Y OFFLINE ──────────────────────
   useEffect(() => {
-    // Solo se ejecuta UNA VEZ al montar
+    // 1. Carga inicial
     reloadClientes();
 
     const triggerSync = async () => {
+      // Bloqueo para evitar múltiples sincronizaciones simultáneas
       if (isSyncingRef.current || !navigator.onLine) return;
       isSyncingRef.current = true;
       try {
@@ -102,25 +82,43 @@ export default function App() {
       }
     };
 
-    triggerSync();
+    const runPeriodicWork = () => {
+      // Verificar cola local
+      try {
+        const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
+        setPendingCount(queue.length);
+        // Si hay red, intentar subir lo pendiente
+        if (navigator.onLine && queue.length > 0) {
+          triggerSync();
+        }
+      } catch (e) {
+        console.error('Error checking pending:', e);
+      }
+    };
+
+    // Tareas iniciales
+    runPeriodicWork();
     
-    const interval = setInterval(checkPending, 3000);
+    // Listeners y temporizadores estables
+    const interval = setInterval(runPeriodicWork, 15000); // 15s para ser conservadores
     window.addEventListener('online', triggerSync);
     
     return () => {
       clearInterval(interval);
       window.removeEventListener('online', triggerSync);
     };
+    // No dependemos de nada que cambie para evitar bucles (loop-proof)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); 
 
+  // ─── HANDLERS DE UI ──────────────────────────────────────────
   function handleSelectClient(cliente) {
     setClienteActivo(cliente);
   }
 
   function handleBack() {
     setClienteActivo(null);
-    reloadClientes(); // Refrescar totales al volver
+    reloadClientes();
   }
 
   function handleClientAdded(nuevo) {
@@ -182,7 +180,7 @@ export default function App() {
         />
       )}
 
-      {/* Indicador de Offline */}
+      {/* Indicador de Offline / Sincronización */}
       {(!navigator.onLine || pendingCount > 0) && (
         <div className={`offline-badge ${!navigator.onLine ? 'is-offline' : 'is-pending'}`}>
           {!navigator.onLine ? '⚠️ Sin conexión' : '☁️ Sincronizando...'}

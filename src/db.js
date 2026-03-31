@@ -69,10 +69,14 @@ export async function getClientesConMetaData() {
         console.error('Error in getClientesConMetaData (Offline?):', err);
         const cache = localStorage.getItem('clientes_cache');
         if (cache) {
-            console.log('Serving from cache...');
-            return JSON.parse(cache);
+            try {
+                console.log('Serving from cache...');
+                return JSON.parse(cache);
+            } catch (e) {
+                console.error('Malformed cache:', e);
+            }
         }
-        throw err;
+        return []; // Fallback final para evitar que la app explote
     }
 }
 
