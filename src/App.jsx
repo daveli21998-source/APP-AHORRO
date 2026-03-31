@@ -66,7 +66,6 @@ export default function App() {
     reloadClientes();
 
     const triggerSync = async () => {
-      // Bloqueo para evitar múltiples sincronizaciones simultáneas
       if (isSyncingRef.current || !navigator.onLine) return;
       isSyncingRef.current = true;
       try {
@@ -83,11 +82,9 @@ export default function App() {
     };
 
     const runPeriodicWork = () => {
-      // Verificar cola local
       try {
         const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
         setPendingCount(queue.length);
-        // Si hay red, intentar subir lo pendiente
         if (navigator.onLine && queue.length > 0) {
           triggerSync();
         }
@@ -96,18 +93,22 @@ export default function App() {
       }
     };
 
-    // Tareas iniciales
+    // Alerta de PWA lista
+    const handleOfflineReady = () => {
+      showToast('✅ App lista para usar sin internet', '🚀');
+    };
+
     runPeriodicWork();
     
-    // Listeners y temporizadores estables
-    const interval = setInterval(runPeriodicWork, 15000); // 15s para ser conservadores
+    const interval = setInterval(runPeriodicWork, 15000); 
     window.addEventListener('online', triggerSync);
+    window.addEventListener('app-offline-ready', handleOfflineReady);
     
     return () => {
       clearInterval(interval);
       window.removeEventListener('online', triggerSync);
+      window.removeEventListener('app-offline-ready', handleOfflineReady);
     };
-    // No dependemos de nada que cambie para evitar bucles (loop-proof)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); 
 

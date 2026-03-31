@@ -4,10 +4,10 @@ import './offline.css'
 import App from './App.jsx'
 import { registerSW } from 'virtual:pwa-register'
 
-// Register PWA service worker and log when ready for offline use
+// Register PWA service worker and dispatch event when ready
 registerSW({
   onOfflineReady() {
-    console.log('--- APP LISTA PARA USAR SIN INTERNET ---')
+    window.dispatchEvent(new Event('app-offline-ready'));
   }
 })
 
