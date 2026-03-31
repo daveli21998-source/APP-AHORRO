@@ -8,13 +8,33 @@ import { generateExcelPasaje } from './lib/excelGenerator';
 import { useToast } from './hooks/useToast';
 import './index.css';
 
+// ─── SEGURIDAD DE ALMACENAMIENTO ──────────────────────────────
+const safeStorage = {
+  get: (key, fallback = null) => {
+    try {
+      const val = localStorage.getItem(key);
+      return val ? JSON.parse(val) : fallback;
+    } catch (e) {
+      console.error('Storage Get Error:', key, e);
+      return fallback;
+    }
+  },
+  set: (key, val) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (e) {
+      console.error('Storage Set Error:', key, e);
+    }
+  }
+};
+
 export default function App() {
   const [clientes, setClientes] = useState([]);
   const [clienteActivo, setClienteActivo] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
-  const [pwaStatus, setPwaStatus] = useState('Verificando...');
+  const [pwaStatus, setPwaStatus] = useState('VERIFICANDO...');
   const { toast, showToast } = useToast();
   const isSyncingRef = useRef(false);
 
@@ -25,7 +45,6 @@ export default function App() {
       if (data) setClientes(data);
     } catch (err) {
       console.error('Error reloading clientes:', err);
-      setPwaStatus('Error de Carga');
     }
   }, []);
 
@@ -64,7 +83,6 @@ export default function App() {
 
   // ─── LOGICA DE SINCRONIZACIÓN Y OFFLINE ──────────────────────
   useEffect(() => {
-    // 1. Carga inicial
     reloadClientes();
 
     const triggerSync = async () => {
@@ -84,25 +102,20 @@ export default function App() {
     };
 
     const runPeriodicWork = () => {
-      try {
-        const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
-        setPendingCount(queue.length);
-        if (navigator.onLine && queue.length > 0) {
-          triggerSync();
-        }
-      } catch (e) {
-        console.error('Error checking pending:', e);
+      const queue = safeStorage.get('pending_pagos', []);
+      setPendingCount(queue.length);
+      if (navigator.onLine && queue.length > 0) {
+        triggerSync();
       }
     };
 
-    // Alerta de PWA lista
     const handleOfflineReady = () => {
+      setPwaStatus('LISTO: OFFLINE OK');
       showToast('✅ App lista para usar sin internet', '🚀');
-      setPwaStatus('MODO OFFLINE OK');
     };
 
     const handleRegistered = () => {
-        setPwaStatus('Sistema Activo');
+      setPwaStatus('LISTO: CACHÉ ACTIVA');
     };
 
     runPeriodicWork();
@@ -121,39 +134,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); 
 
-  // ─── HANDLERS DE UI ──────────────────────────────────────────
-  function handleSelectClient(cliente) {
-    setClienteActivo(cliente);
-  }
-
-  function handleBack() {
-    setClienteActivo(null);
-    reloadClientes();
-  }
-
-  function handleClientAdded(nuevo) {
-    reloadClientes();
-    showToast(`${nuevo.nombre} agregado`, '🎉');
-  }
-
-  function handleClientDeleted(id) {
-    setClienteActivo(null);
-    reloadClientes();
-    showToast('Cliente eliminado', '🗑️');
-  }
-
-  function handleEditClient(cliente) {
-    setClienteEditando(cliente);
-  }
-
-  function handleClientEdited(actualizado) {
-    setClienteActivo(actualizado);
-    reloadClientes();
-    showToast('Cliente actualizado', '✅');
-  }
-
   return (
     <>
+      {/* ─── BARRA DE DIAGNÓSTICO (NUEVA: SUPER VISIBLE) ─── */}
+      <div style={{ background: '#b91c1c', color: '#fff', fontSize: '10px', padding: '4px', textAlign: 'center', fontWeight: '900', zIndex: 10000, position: 'sticky', top: 0 }}>
+        [ DEPURACIÓN ] ESTADO: {pwaStatus} | RED: {navigator.onLine ? 'CONECTADO' : 'SIN RED'}
+      </div>
+
       {/* Vista activa */}
       {clienteActivo ? (
         <ClientDetail
@@ -198,11 +185,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Panel de Diagnóstico PWA (Solo visible abajo a la derecha) */}
-      <div style={{ position: 'fixed', bottom: 4, right: 4, fontSize: 8, color: 'var(--text-3)', opacity: 0.5, zIndex: 10000, pointerEvents: 'none' }}>
-        SW: {pwaStatus} | {navigator.onLine ? 'ON' : 'OFF'}
-      </div>
-
       {/* Toast global */}
       <div className={`toast ${toast.visible ? 'visible' : ''}`} role="status" aria-live="polite">
         <span className="toast-icon">{toast.icon}</span>
@@ -210,4 +192,30 @@ export default function App() {
       </div>
     </>
   );
+
+  function handleBack() {
+    setClienteActivo(null);
+    reloadClientes();
+  }
+
+  function handleClientAdded(nuevo) {
+    reloadClientes();
+    showToast(`${nuevo.nombre} agregado`, '🎉');
+  }
+
+  function handleClientDeleted(id) {
+    setClienteActivo(null);
+    reloadClientes();
+    showToast('Cliente eliminado', '🗑️');
+  }
+
+  function handleEditClient(cliente) {
+    setClienteEditando(cliente);
+  }
+
+  function handleClientEdited(actualizado) {
+    setClienteActivo(actualizado);
+    reloadClientes();
+    showToast('Cliente actualizado', '✅');
+  }
 }
