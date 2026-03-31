@@ -24,3 +24,8 @@ dist-ssr
 *.sw?
 .env
 
+# PWA
+dev-dist
+public/sw.js
+public/workbox-*.js
+
