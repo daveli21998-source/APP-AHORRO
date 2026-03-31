@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import HomeScreen from './components/HomeScreen';
 import ClientDetail from './components/ClientDetail';
 import AddClientModal from './components/AddClientModal';
@@ -80,13 +80,15 @@ export default function App() {
     setPendingCount(queue.length);
   }, []);
 
+  const isSyncingRef = useRef(false);
+
   useEffect(() => {
-    // 1. Carga inicial
+    // Solo se ejecuta UNA VEZ al montar
     reloadClientes();
-    
-    // 2. Sincronización inicial y al volver a estar online
+
     const triggerSync = async () => {
-      if (!navigator.onLine || isSyncing) return;
+      if (isSyncingRef.current || !navigator.onLine) return;
+      isSyncingRef.current = true;
       try {
         const { synced } = await syncOfflineData();
         if (synced > 0) {
@@ -95,19 +97,22 @@ export default function App() {
         }
       } catch (err) {
         console.error('Sync error:', err);
+      } finally {
+        isSyncingRef.current = false;
       }
     };
 
     triggerSync();
     
-    window.addEventListener('online', triggerSync);
     const interval = setInterval(checkPending, 3000);
-
+    window.addEventListener('online', triggerSync);
+    
     return () => {
-      window.removeEventListener('online', triggerSync);
       clearInterval(interval);
+      window.removeEventListener('online', triggerSync);
     };
-  }, [reloadClientes, checkPending, showToast]); // Eliminado handleSync e isSyncing de las dependencias
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); 
 
   function handleSelectClient(cliente) {
     setClienteActivo(cliente);
