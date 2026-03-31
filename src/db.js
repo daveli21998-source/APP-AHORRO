@@ -25,40 +25,55 @@ function mapCliente(c) {
 }
 
 export async function getClientesConMetaData() {
-    const today = new Date().toISOString().split('T')[0];
-    
-    // 1. Obtener clientes
-    const { data: clientes, error: errC } = await supabase
-        .from('ahorros_clientes')
-        .select('*')
-        .order('nombre');
-    if (errC) throw errC;
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // 1. Obtener clientes
+        const { data: clientes, error: errC } = await supabase
+            .from('ahorros_clientes')
+            .select('*')
+            .order('nombre');
+        if (errC) throw errC;
 
-    // 2. Obtener pagos de hoy para todos
-    const { data: pagosHoy, error: errP } = await supabase
-        .from('ahorros_pagos')
-        .select('cliente_id')
-        .eq('fecha', today);
-    if (errP) throw errP;
+        // 2. Obtener pagos de hoy para todos
+        const { data: pagosHoy, error: errP } = await supabase
+            .from('ahorros_pagos')
+            .select('cliente_id')
+            .eq('fecha', today);
+        if (errP) throw errP;
 
-    // 3. Obtener totales acumulados por cliente
-    // Nota: Podríamos hacer un sum() agrupado, pero para simplicidad y dado que es un disco duro local/desarrollo:
-    const { data: todosLosPagos, error: errT } = await supabase
-        .from('ahorros_pagos')
-        .select('cliente_id, monto');
-    if (errT) throw errT;
+        // 3. Obtener totales acumulados por cliente
+        const { data: todosLosPagos, error: errT } = await supabase
+            .from('ahorros_pagos')
+            .select('cliente_id, monto');
+        if (errT) throw errT;
 
-    const pagosHoySet = new Set(pagosHoy.map(p => p.cliente_id));
-    const totalesMap = todosLosPagos.reduce((acc, p) => {
-        acc[p.cliente_id] = (acc[p.cliente_id] || 0) + Number(p.monto);
-        return acc;
-    }, {});
+        const pagosHoySet = new Set(pagosHoy.map(p => p.cliente_id));
+        const totalesMap = todosLosPagos.reduce((acc, p) => {
+            acc[p.cliente_id] = (acc[p.cliente_id] || 0) + Number(p.monto);
+            return acc;
+        }, {});
 
-    return clientes.map(c => ({
-        ...mapCliente(c),
-        pagadoHoy: pagosHoySet.has(c.id),
-        totalAcumulado: totalesMap[c.id] || 0
-    }));
+        const result = clientes.map(c => ({
+            ...mapCliente(c),
+            pagadoHoy: pagosHoySet.has(c.id),
+            totalAcumulado: totalesMap[c.id] || 0
+        }));
+
+        // Caching for offline mode
+        localStorage.setItem('clientes_cache', JSON.stringify(result));
+        localStorage.setItem('clientes_cache_timestamp', new Date().toISOString());
+
+        return result;
+    } catch (err) {
+        console.error('Error in getClientesConMetaData (Offline?):', err);
+        const cache = localStorage.getItem('clientes_cache');
+        if (cache) {
+            console.log('Serving from cache...');
+            return JSON.parse(cache);
+        }
+        throw err;
+    }
 }
 
 export async function addCliente(data) {
@@ -171,7 +186,15 @@ export async function addPago(data) {
         .select()
         .single();
 
-    if (error) throw error;
+    if (error) {
+        if (!navigator.onLine || error.message === 'Failed to fetch') {
+            const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
+            queue.push({ ...nuevo, id_local: crypto.randomUUID() });
+            localStorage.setItem('pending_pagos', JSON.stringify(queue));
+            return { ...nuevo, status: 'pending' };
+        }
+        throw error;
+    }
     return insertedData;
 }
 
@@ -263,4 +286,32 @@ export async function deleteLugar(nombre) {
         .eq('nombre', nombre);
     
     return !error;
+}
+
+// ─── OFFLINE SYNC ─────────────────────────────────────────────
+export async function syncOfflineData() {
+    if (!navigator.onLine) return { synced: 0, failed: 0 };
+    
+    const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
+    if (queue.length === 0) return { synced: 0, failed: 0 };
+
+    let synced = 0;
+    let failed = 0;
+    const remaining = [];
+
+    for (const item of queue) {
+        try {
+            const { id_local, ...pagoData } = item;
+            const { error } = await supabase.from('ahorros_pagos').insert([pagoData]);
+            if (error) throw error;
+            synced++;
+        } catch (err) {
+            console.error('Failed to sync item:', item, err);
+            remaining.push(item);
+            failed++;
+        }
+    }
+
+    localStorage.setItem('pending_pagos', JSON.stringify(remaining));
+    return { synced, failed };
 }

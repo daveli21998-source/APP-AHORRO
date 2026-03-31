@@ -3,7 +3,7 @@ import HomeScreen from './components/HomeScreen';
 import ClientDetail from './components/ClientDetail';
 import AddClientModal from './components/AddClientModal';
 import EditClientModal from './components/EditClientModal';
-import { getClientesConMetaData, getPagosByCliente } from './db';
+import { getClientesConMetaData, getPagosByCliente, syncOfflineData } from './db';
 import { generateExcelPasaje } from './lib/excelGenerator';
 import { useToast } from './hooks/useToast';
 import './index.css';
@@ -13,6 +13,7 @@ export default function App() {
   const [clienteActivo, setClienteActivo] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const { toast, showToast } = useToast();
 
   const reloadClientes = useCallback(async () => {
@@ -54,9 +55,32 @@ export default function App() {
     }
   };
 
+  const handleSync = useCallback(async () => {
+    if (isSyncing || !navigator.onLine) return;
+    setIsSyncing(true);
+    try {
+      const { synced, failed } = await syncOfflineData();
+      if (synced > 0) {
+        showToast(`Sincronizados ${synced} pagos pendientes`, '☁️');
+        reloadClientes();
+      }
+      if (failed > 0) {
+        showToast(`No se pudieron sincronizar ${failed} pagos`, '⚠️');
+      }
+    } catch (err) {
+      console.error('Sync error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing, reloadClientes, showToast]);
+
   useEffect(() => {
     reloadClientes();
-  }, [reloadClientes]);
+    handleSync();
+
+    window.addEventListener('online', handleSync);
+    return () => window.removeEventListener('online', handleSync);
+  }, [reloadClientes, handleSync]);
 
   function handleSelectClient(cliente) {
     setClienteActivo(cliente);
@@ -124,6 +148,13 @@ export default function App() {
           onClose={() => setClienteEditando(null)}
           onSaved={handleClientEdited}
         />
+      )}
+
+      {/* Indicador de Offline */}
+      {!navigator.onLine && (
+        <div className="offline-badge">
+          Offline - Los datos se guardarán localmente
+        </div>
       )}
 
       {/* Toast global */}
