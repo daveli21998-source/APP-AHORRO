@@ -81,17 +81,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // 1. Carga inicial
     reloadClientes();
-    handleSync();
-    checkPending();
+    
+    // 2. Sincronización inicial y al volver a estar online
+    const triggerSync = async () => {
+      if (!navigator.onLine || isSyncing) return;
+      try {
+        const { synced } = await syncOfflineData();
+        if (synced > 0) {
+          showToast(`Sincronizados ${synced} pagos`, '☁️');
+          reloadClientes();
+        }
+      } catch (err) {
+        console.error('Sync error:', err);
+      }
+    };
 
+    triggerSync();
+    
+    window.addEventListener('online', triggerSync);
     const interval = setInterval(checkPending, 3000);
-    window.addEventListener('online', handleSync);
+
     return () => {
-      window.removeEventListener('online', handleSync);
+      window.removeEventListener('online', triggerSync);
       clearInterval(interval);
     };
-  }, [reloadClientes, handleSync, checkPending]);
+  }, [reloadClientes, checkPending, showToast]); // Eliminado handleSync e isSyncing de las dependencias
 
   function handleSelectClient(cliente) {
     setClienteActivo(cliente);
