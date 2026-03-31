@@ -187,9 +187,19 @@ export async function addPago(data) {
         .single();
 
     if (error) {
-        if (!navigator.onLine || error.message === 'Failed to fetch') {
+        const isNetworkErr = !navigator.onLine || 
+                           error.message === 'Failed to fetch' || 
+                           error.message?.toLowerCase().includes('network') ||
+                           error.status === 0;
+
+        if (isNetworkErr) {
+            console.warn('Network error detected. Saving pago to queue...');
             const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
-            queue.push({ ...nuevo, id_local: crypto.randomUUID() });
+            const id_local = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+                ? crypto.randomUUID() 
+                : `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            
+            queue.push({ ...nuevo, id_local });
             localStorage.setItem('pending_pagos', JSON.stringify(queue));
             return { ...nuevo, status: 'pending' };
         }

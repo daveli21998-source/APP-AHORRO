@@ -14,6 +14,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const { toast, showToast } = useToast();
 
   const reloadClientes = useCallback(async () => {
@@ -74,13 +75,23 @@ export default function App() {
     }
   }, [isSyncing, reloadClientes, showToast]);
 
+  const checkPending = useCallback(() => {
+    const queue = JSON.parse(localStorage.getItem('pending_pagos') || '[]');
+    setPendingCount(queue.length);
+  }, []);
+
   useEffect(() => {
     reloadClientes();
     handleSync();
+    checkPending();
 
+    const interval = setInterval(checkPending, 3000);
     window.addEventListener('online', handleSync);
-    return () => window.removeEventListener('online', handleSync);
-  }, [reloadClientes, handleSync]);
+    return () => {
+      window.removeEventListener('online', handleSync);
+      clearInterval(interval);
+    };
+  }, [reloadClientes, handleSync, checkPending]);
 
   function handleSelectClient(cliente) {
     setClienteActivo(cliente);
@@ -151,9 +162,10 @@ export default function App() {
       )}
 
       {/* Indicador de Offline */}
-      {!navigator.onLine && (
-        <div className="offline-badge">
-          Offline - Los datos se guardarán localmente
+      {(!navigator.onLine || pendingCount > 0) && (
+        <div className={`offline-badge ${!navigator.onLine ? 'is-offline' : 'is-pending'}`}>
+          {!navigator.onLine ? '⚠️ Sin conexión' : '☁️ Sincronizando...'}
+          {pendingCount > 0 && <span> ({pendingCount} pagos pendientes)</span>}
         </div>
       )}
 

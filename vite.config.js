@@ -26,6 +26,13 @@ export default defineConfig({
             type: 'image/svg+xml'
           }
         ]
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
+        cleanupOutdatedCaches: true
+      },
+      devOptions: {
+        enabled: true
       }
     })
   ],
