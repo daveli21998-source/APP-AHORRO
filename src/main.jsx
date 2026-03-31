@@ -4,9 +4,12 @@ import './offline.css'
 import App from './App.jsx'
 import { registerSW } from 'virtual:pwa-register'
 
-// Register PWA service worker with default settings for stability
-// We avoid 'immediate: true' if we suspect reload loops
-registerSW()
+// Register PWA service worker and log when ready for offline use
+registerSW({
+  onOfflineReady() {
+    console.log('--- APP LISTA PARA USAR SIN INTERNET ---')
+  }
+})
 
 createRoot(document.getElementById('root')).render(
   <App />

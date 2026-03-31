@@ -8,12 +8,14 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
-      includeAssets: ['favicon.svg', 'icons.svg'],
+      includeAssets: ['favicon.svg', 'icons.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'APP AHORROS',
         short_name: 'Ahorros',
         description: 'Aplicación de Gestión de Ahorros con Soporte Offline',
-        theme_color: '#000000',
+        theme_color: '#10b981',
+        background_color: '#080d0a',
+        display: 'standalone',
         icons: [
           {
             src: 'favicon.svg',
@@ -28,8 +30,9 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
-        cleanupOutdatedCaches: true
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,woff2}'],
+        cleanupOutdatedCaches: true,
+        navigateFallback: 'index.html'
       },
       devOptions: {
         enabled: true
