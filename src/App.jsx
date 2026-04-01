@@ -35,6 +35,7 @@ export default function App() {
   const [clienteEditando, setClienteEditando] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { toast, showToast } = useToast();
   const isSyncingRef = useRef(false);
 
@@ -110,32 +111,40 @@ export default function App() {
     const updatePendingCount = () => {
       const queue = JSON.parse(localStorage.getItem('offline_queue') || '[]');
       setPendingCount(queue.length);
+      if (queue.length > 0 && navigator.onLine) triggerSync(); 
     };
 
     updatePendingCount();
+    if (navigator.onLine) triggerSync();
     
-    // Listeners
-    window.addEventListener('online', triggerSync);
+    const handleOnline = () => { setIsOnline(true); triggerSync(); };
+    const handleOffline = () => { setIsOnline(false); };
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     window.addEventListener('offline-queue-updated', updatePendingCount);
+    window.addEventListener('sync-success', reloadClientes); // Refrescar lista si algo se subió
     
-    // Intervalo de seguridad para sync periódico si hay red
+    // Intervalo de seguridad para sync periódico
     const interval = setInterval(() => {
       updatePendingCount();
       if (navigator.onLine) triggerSync();
-    }, 30000); 
+    }, 5000); // 5 segundos para máxima frescura
     
     return () => {
       clearInterval(interval);
-      window.removeEventListener('online', triggerSync);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('offline-queue-updated', updatePendingCount);
+      window.removeEventListener('sync-success', reloadClientes);
     };
   }, [triggerSync, reloadClientes]); 
 
   return (
     <>
       {/* ─── INDICADOR DE ESTADO (MODERNO) ─── */}
-      <div className={`status-bar ${!navigator.onLine ? 'is-offline' : (isSyncing ? 'is-syncing' : '')}`}>
-        {!navigator.onLine ? '🛑 Sin Conexión (Modo Offline)' : (isSyncing ? '🔄 Sincronizando datos...' : '✅ En Línea')}
+      <div className={`status-bar ${!isOnline ? 'is-offline' : (isSyncing ? 'is-syncing' : '')}`}>
+        {!isOnline ? '🛑 Sin Conexión (Modo Offline)' : (isSyncing ? '🔄 Sincronizando datos...' : '✅ En Línea')}
       </div>
 
       {/* Vista activa */}
@@ -174,10 +183,10 @@ export default function App() {
         />
       )}
 
-      {/* Indicador de items pendientes */}
-      {pendingCount > 0 && (
+      {/* Indicador de items pendientes (SOLO SI NO HAY INTERNET) */}
+      {pendingCount > 0 && !isOnline && (
         <div className="pending-badge" onClick={triggerSync}>
-          ☁️ {pendingCount} cambios pendientes {navigator.onLine && '(Toca para subir)'}
+          ☁️ {pendingCount} cambios guardados localmente
         </div>
       )}
 
@@ -201,12 +210,14 @@ export default function App() {
 
   function handleClientAdded(nuevo) {
     reloadClientes();
+    triggerSync(); // Intentar subir de inmediato
     showToast(`${nuevo.nombre} agregado`, '🎉');
   }
 
   function handleClientDeleted(id) {
     setClienteActivo(null);
     reloadClientes();
+    triggerSync();
     showToast('Cliente eliminado', '🗑️');
   }
 
@@ -217,6 +228,7 @@ export default function App() {
   function handleClientEdited(actualizado) {
     setClienteActivo(actualizado);
     reloadClientes();
+    triggerSync();
     showToast('Cliente actualizado', '✅');
   }
 }

@@ -813,10 +813,13 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   z-index: 500;
   display: flex;
-  align-items: flex-end;
+  align-items: flex-end; /* Para estilo de Bottom Sheet */
+  justify-content: center;
   animation: overlayIn 0.2s ease;
+  overflow: hidden;
 }
 
 @keyframes overlayIn {
@@ -832,12 +835,17 @@ body {
 .modal-sheet {
   width: 100%;
   max-width: 480px;
+  max-height: 92vh; /* No sobrepasa la pantalla */
   margin: 0 auto;
   background: var(--surface);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   border-top: 1px solid var(--border);
-  padding: 24px 24px calc(40px + var(--safe-bottom));
+  padding: 20px 24px calc(20px + var(--safe-bottom));
   animation: sheetIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow-y: auto; /* PERMITE SCROLL INTERNO */
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes sheetIn {

@@ -167,7 +167,9 @@ export default function EditClientModal({ cliente, onClose, onSaved }) {
                             value={form.telefono} onChange={handleChange} type="tel" />
                     </div>
 
-                    <div className="btn-row">
+                    <div style={{ height: 60 }} />
+
+                    <div className="btn-row" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)', padding: '10px 0', borderTop: '1px solid var(--border-2)', zIndex: 10 }}>
                         <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
                         <button type="submit" className="btn-primary" id="btn-confirm-edit">✅ Actualizar</button>
                     </div>

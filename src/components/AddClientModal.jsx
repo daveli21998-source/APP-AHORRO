@@ -191,7 +191,9 @@ export default function AddClientModal({ onClose, onSaved }) {
                         {errors.fechaRegistro && <Err msg={errors.fechaRegistro} />}
                     </div>
 
-                    <div className="btn-row">
+                    <div style={{ height: 60 }} /> {/* Espacio extra para que el teclado no tape el botn */}
+
+                    <div className="btn-row" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)', padding: '10px 0', borderTop: '1px solid var(--border-2)', zIndex: 10 }}>
                         <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
                         <button type="submit" className="btn-primary" id="btn-confirm-add-client">✅ Guardar Cliente</button>
                     </div>

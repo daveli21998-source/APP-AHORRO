@@ -1,3 +1,5 @@
+import { supabase } from './lib/supabase';
+
 // ─── OFFLINE SYNC SYSTEM ──────────────────────────────────────
 const OFFLINE_QUEUE_KEY = 'offline_queue';
 
@@ -36,7 +38,8 @@ export async function syncOfflineData() {
     // Mapeo de IDs locales a IDs reales de Supabase
     const idMap = {};
 
-    for (const op of queue) {
+    for (let i = 0; i < queue.length; i++) {
+        const op = queue[i];
         try {
             let res;
             
@@ -51,9 +54,22 @@ export async function syncOfflineData() {
             if (op.type === 'INSERT_CLIENTE') {
                 res = await supabase.from('ahorros_clientes').insert([op.data]).select().single();
                 if (!res.error && res.data) {
-                    idMap[op.id_local] = res.data.id; // Mapear ID local al real
+                    const realId = res.data.id;
+                    idMap[op.id_local] = realId; 
+                    
+                    // IMPORTANTE: Actualizar el RESTO de la cola para que los pagos 
+                    // que vengan después ya tengan el ID real.
+                    for (let j = i + 1; j < queue.length; j++) {
+                        if (queue[j].data && queue[j].data.cliente_id === op.id_local) {
+                            queue[j].data.cliente_id = realId;
+                        }
+                    }
                 }
             } else if (op.type === 'INSERT_PAGO') {
+                // Doble chequeo por si acaso
+                if (String(op.data.cliente_id).startsWith('local-') && idMap[op.data.cliente_id]) {
+                    op.data.cliente_id = idMap[op.data.cliente_id];
+                }
                 res = await supabase.from('ahorros_pagos').insert([op.data]);
             } else if (op.type === 'UPDATE_CLIENTE') {
                 res = await supabase.from('ahorros_clientes').update(op.data).eq('id', op.id);
@@ -74,6 +90,10 @@ export async function syncOfflineData() {
 
     saveQueue(remaining);
     window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: remaining.length } }));
+    
+    // Si hubo éxitos pero quedaron fallos, avisar a la UI para refrescar la lista
+    if (synced > 0) window.dispatchEvent(new CustomEvent('sync-success'));
+
     return { synced, failed };
 }
 
