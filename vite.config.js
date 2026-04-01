@@ -6,41 +6,5 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   plugins: [
     react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icons.svg', 'apple-touch-icon.png'],
-      manifest: {
-        name: 'APP AHORROS',
-        short_name: 'Ahorros',
-        description: 'Gestión de Ahorros con Soporte Offline',
-        theme_color: '#10b981',
-        background_color: '#080d0a',
-        display: 'standalone',
-        icons: [
-          {
-            src: 'favicon.svg',
-            sizes: '192x192',
-            type: 'image/svg+xml',
-            purpose: 'any maskable'
-          },
-          {
-            src: 'favicon.svg',
-            sizes: '512x512',
-            type: 'image/svg+xml',
-            purpose: 'any maskable'
-          }
-        ]
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,woff2}'],
-        cleanupOutdatedCaches: true,
-        navigateFallback: 'index.html',
-        skipWaiting: true,
-        clientsClaim: true
-      },
-      devOptions: {
-        enabled: true
-      }
-    })
   ],
 })

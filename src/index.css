@@ -1060,3 +1060,87 @@ body {
     transform: scale(1.06);
   }
 }
+
+/* ─── Status Bar & Pending Badge (Premium) ─────────────────── */
+/* Indicador de Versión */
+.app-version-label {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--text-3);
+    opacity: 0.4;
+    user-select: none;
+    pointer-events: none;
+    z-index: 50;
+    letter-spacing: 0.5px;
+    background: var(--surface-1);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* Status Bar enhancements */
+.status-bar {
+    position: sticky;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 800;
+    text-align: center;
+    background: var(--surface-2);
+    color: var(--text-2);
+    border-bottom: 1px solid var(--border);
+    z-index: 1000;
+    transition: all 0.3s ease;
+}
+
+.status-bar.is-offline {
+    background: var(--danger);
+    color: white;
+}
+
+.status-bar.is-syncing {
+    background: var(--primary);
+    color: white;
+    animation: pulseSync 2s infinite;
+}
+
+@keyframes pulseSync {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { opacity: 0.8; }
+}
+
+.pending-badge {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16, 185, 129, 0.95);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3), 0 0 15px rgba(16, 185, 129, 0.4);
+  z-index: 999;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  animation: slideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes slideUp {
+  from { transform: translate(-50%, 20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.pending-badge:active {
+  transform: translateX(-50%) scale(0.95);
+}

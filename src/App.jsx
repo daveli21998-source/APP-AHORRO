@@ -34,7 +34,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
-  const [pwaStatus, setPwaStatus] = useState('VERIFICANDO...');
+  const [isSyncing, setIsSyncing] = useState(false);
   const { toast, showToast } = useToast();
   const isSyncingRef = useRef(false);
 
@@ -82,63 +82,60 @@ export default function App() {
   };
 
   // ─── LOGICA DE SINCRONIZACIÓN Y OFFLINE ──────────────────────
+  const triggerSync = useCallback(async () => {
+    if (isSyncingRef.current || !navigator.onLine) return;
+    
+    const queue = JSON.parse(localStorage.getItem('offline_queue') || '[]');
+    if (queue.length === 0) return;
+
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+    try {
+      const { synced } = await syncOfflineData();
+      if (synced > 0) {
+        showToast(`Sincronizados ${synced} cambios`, '☁️');
+        reloadClientes();
+      }
+    } catch (err) {
+      console.error('Sync error:', err);
+    } finally {
+      isSyncingRef.current = false;
+      setIsSyncing(false);
+    }
+  }, [reloadClientes, showToast]);
+
   useEffect(() => {
     reloadClientes();
 
-    const triggerSync = async () => {
-      if (isSyncingRef.current || !navigator.onLine) return;
-      isSyncingRef.current = true;
-      try {
-        const { synced } = await syncOfflineData();
-        if (synced > 0) {
-          showToast(`Sincronizados ${synced} pagos`, '☁️');
-          reloadClientes();
-        }
-      } catch (err) {
-        console.error('Sync error:', err);
-      } finally {
-        isSyncingRef.current = false;
-      }
-    };
-
-    const runPeriodicWork = () => {
-      const queue = safeStorage.get('pending_pagos', []);
+    const updatePendingCount = () => {
+      const queue = JSON.parse(localStorage.getItem('offline_queue') || '[]');
       setPendingCount(queue.length);
-      if (navigator.onLine && queue.length > 0) {
-        triggerSync();
-      }
     };
 
-    const handleOfflineReady = () => {
-      setPwaStatus('LISTO: OFFLINE OK');
-      showToast('✅ App lista para usar sin internet', '🚀');
-    };
-
-    const handleRegistered = () => {
-      setPwaStatus('LISTO: CACHÉ ACTIVA');
-    };
-
-    runPeriodicWork();
+    updatePendingCount();
     
-    const interval = setInterval(runPeriodicWork, 15000); 
+    // Listeners
     window.addEventListener('online', triggerSync);
-    window.addEventListener('app-offline-ready', handleOfflineReady);
-    window.addEventListener('app-registered', handleRegistered);
+    window.addEventListener('offline-queue-updated', updatePendingCount);
+    
+    // Intervalo de seguridad para sync periódico si hay red
+    const interval = setInterval(() => {
+      updatePendingCount();
+      if (navigator.onLine) triggerSync();
+    }, 30000); 
     
     return () => {
       clearInterval(interval);
       window.removeEventListener('online', triggerSync);
-      window.removeEventListener('app-offline-ready', handleOfflineReady);
-      window.removeEventListener('app-registered', handleRegistered);
+      window.removeEventListener('offline-queue-updated', updatePendingCount);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, [triggerSync, reloadClientes]); 
 
   return (
     <>
-      {/* ─── BARRA DE DIAGNÓSTICO (NUEVA: SUPER VISIBLE) ─── */}
-      <div style={{ background: '#b91c1c', color: '#fff', fontSize: '10px', padding: '4px', textAlign: 'center', fontWeight: '900', zIndex: 10000, position: 'sticky', top: 0 }}>
-        [ DEPURACIÓN ] ESTADO: {pwaStatus} | RED: {navigator.onLine ? 'CONECTADO' : 'SIN RED'}
+      {/* ─── INDICADOR DE ESTADO (MODERNO) ─── */}
+      <div className={`status-bar ${!navigator.onLine ? 'is-offline' : (isSyncing ? 'is-syncing' : '')}`}>
+        {!navigator.onLine ? '🛑 Sin Conexión (Modo Offline)' : (isSyncing ? '🔄 Sincronizando datos...' : '✅ En Línea')}
       </div>
 
       {/* Vista activa */}
@@ -177,13 +174,17 @@ export default function App() {
         />
       )}
 
-      {/* Indicador de Offline / Sincronización */}
-      {(!navigator.onLine || pendingCount > 0) && (
-        <div className={`offline-badge ${!navigator.onLine ? 'is-offline' : 'is-pending'}`}>
-          {!navigator.onLine ? '⚠️ Sin conexión' : '☁️ Sincronizando...'}
-          {pendingCount > 0 && <span> ({pendingCount} pagos pendientes)</span>}
+      {/* Indicador de items pendientes */}
+      {pendingCount > 0 && (
+        <div className="pending-badge" onClick={triggerSync}>
+          ☁️ {pendingCount} cambios pendientes {navigator.onLine && '(Toca para subir)'}
         </div>
       )}
+
+      {/* Versión de la App (Footer informativo) */}
+      <div className="app-version-label">
+        Versión 1.0.1 (Offline CRUD v2)
+      </div>
 
       {/* Toast global */}
       <div className={`toast ${toast.visible ? 'visible' : ''}`} role="status" aria-live="polite">
