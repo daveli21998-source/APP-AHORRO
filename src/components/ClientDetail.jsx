@@ -155,11 +155,15 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
                         {cliente.puesto && <span>📍 {cliente.puesto}</span>}
                         {cliente.pasaje && <span>🚪 Pasaje {cliente.pasaje}</span>}
                         {cliente.tipoAhorro && (
-                            <span style={{ color: cliente.tipoAhorro === 'ambos' ? 'var(--info)' : (cliente.tipoAhorro === 'puesto' ? 'var(--warning)' : 'var(--primary)') }}>
-                                {cliente.tipoAhorro === 'ambos' ? '⚖️ AHORRO COMPLETO' : (cliente.tipoAhorro === 'puesto' ? '🏪 AHORRO PUESTO' : '💰 AHORRO NORMAL')}
+                            <span style={{ 
+                                color: cliente.tipoAhorro === 'ambos' ? 'var(--info)' : (cliente.tipoAhorro === 'puesto' ? 'var(--color-puesto)' : 'var(--primary)'),
+                                fontWeight: 800,
+                                fontSize: '10.5px'
+                            }}>
+                                {cliente.tipoAhorro === 'ambos' ? '⚖️ COMPLETO' : (cliente.tipoAhorro === 'puesto' ? '🏪 PUESTO' : '💰 NORMAL')}
                             </span>
                         )}
-                        {cliente.lugar && <span style={{ color: 'var(--text-3)' }}>• {cliente.lugar}</span>}
+                        {cliente.lugar && <span style={{ color: 'var(--text-3)', fontSize: '10.5px' }}>• {cliente.lugar}</span>}
                     </div>
                 </div>
                 <div style={{ position: 'relative' }}>
@@ -351,6 +355,7 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
                         id="input-monto"
                         className="custom-amount-input"
                         type="number"
+                        inputMode="decimal"
                         min="0"
                         step="any"
                         placeholder="Otro monto..."

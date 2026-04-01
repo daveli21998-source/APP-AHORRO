@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Users, TrendingUp, ChevronDown, CheckCircle2, Clock, FileDown } from 'lucide-react';
+import { Plus, Users, TrendingUp, ChevronDown, CheckCircle2, Clock, FileDown, DollarSign, Home, BarChart3, Settings } from 'lucide-react';
 import SearchBar from './SearchBar';
 import { buscarClientes } from '../db';
 
@@ -89,20 +89,22 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
                 </button>
             </div>
 
-            {/* Opciones de Vista */}
-            <div style={{ display: 'flex', gap: 10, padding: '0 16px', marginBottom: 12 }}>
-                <button
-                    style={{ flex: 1, padding: '10px', borderRadius: 12, background: activeTab === 'lista' ? 'var(--primary-soft)' : 'var(--surface-2)', border: `2px solid ${activeTab === 'lista' ? 'var(--primary)' : 'transparent'}`, color: activeTab === 'lista' ? 'var(--primary)' : 'var(--text-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', transition: 'all 0.15s' }}
-                    onClick={() => setActiveTab('lista')}
-                >
-                    📝 GENERAL
-                </button>
-                <button
-                    style={{ flex: 1, padding: '10px', borderRadius: 12, background: activeTab === 'lugares' ? 'rgba(59,130,246,0.12)' : 'var(--surface-2)', border: `2px solid ${activeTab === 'lugares' ? '#60a5fa' : 'transparent'}`, color: activeTab === 'lugares' ? '#60a5fa' : 'var(--text-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', transition: 'all 0.15s' }}
-                    onClick={() => setActiveTab('lugares')}
-                >
-                    🗺️ LUGARES
-                </button>
+            {/* Opciones de Vista (Segmented Control) */}
+            <div className="segmented-control-wrapper">
+                <div className="segmented-control">
+                    <button
+                        className={`segmented-item ${activeTab === 'lista' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('lista')}
+                    >
+                        📝 GENERAL
+                    </button>
+                    <button
+                        className={`segmented-item ${activeTab === 'lugares' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('lugares')}
+                    >
+                        🗺️ LUGARES
+                    </button>
+                </div>
             </div>
 
             {/* Lista */}
@@ -125,12 +127,10 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
                     filtrados.map(cliente => {
                         const pagado = cliente.pagadoHoy;
                         return (
-                            <button
+                            <div
                                 key={cliente.id}
-                                id={`client-${cliente.id}`}
                                 className={`client-card ${pagado ? 'status-paid' : 'status-pending'}`}
                                 onClick={() => onSelectClient(cliente)}
-                                style={{ width: '100%', textAlign: 'left', font: 'inherit' }}
                             >
                                 <div className={`client-avatar ${pagado ? 'status-paid' : 'status-pending'}`}>
                                     {getInitials(cliente.nombre)}
@@ -138,37 +138,28 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
                                 <div className="client-info">
                                     <div className="client-name" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                         {cliente.nombre}
-                                        {pagado ? (
-                                            <CheckCircle2 size={16} color="var(--color-paid)" />
-                                        ) : (
-                                            <Clock size={16} color="var(--color-pending)" />
-                                        )}
+                                        {pagado && <CheckCircle2 size={16} color="var(--color-paid)" />}
                                     </div>
                                     <div className="client-meta">
-                                        {cliente.puesto && (
-                                            <span className="puesto-badge">📍 {cliente.puesto}</span>
-                                        )}
-                                        {cliente.pasaje && (
-                                            <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: '4px 10px', fontSize: 13.5, fontWeight: 800 }}>
-                                                🚪 Pasaje {cliente.pasaje}
-                                            </span>
-                                        )}
+                                        {cliente.puesto && <span className="puesto-badge">📍 {cliente.puesto}</span>}
                                         <span style={{
                                             background: cliente.tipoAhorro === 'ambos' ? 'var(--info-soft)' : (cliente.tipoAhorro === 'puesto' ? 'var(--color-puesto-soft)' : 'var(--color-normal-soft)'),
                                             color: cliente.tipoAhorro === 'ambos' ? 'var(--info)' : (cliente.tipoAhorro === 'puesto' ? 'var(--color-puesto)' : 'var(--color-normal)'),
                                             border: `1px solid ${cliente.tipoAhorro === 'ambos' ? 'rgba(59,130,246,0.2)' : (cliente.tipoAhorro === 'puesto' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.2)')}`,
-                                            borderRadius: 8, padding: '4px 10px', fontSize: 13.5, fontWeight: 800
+                                            borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 800
                                         }}>
-                                            {cliente.tipoAhorro === 'ambos' ? '⚖️ AHORRO COMPLETO' : (cliente.tipoAhorro === 'puesto' ? '🏪 AHORRO PUESTO' : '💰 AHORRO NORMAL')}
+                                            {cliente.tipoAhorro === 'ambos' ? '秤 COMPLETO' : (cliente.tipoAhorro === 'puesto' ? '🏪 PUESTO' : '💰 NORMAL')}
                                         </span>
                                     </div>
-                                    {cliente.lugar && (
-                                        <div style={{ color: 'var(--text-1)', fontSize: 12.5, fontWeight: 700, letterSpacing: 0.3, display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                                            🗺️ {cliente.lugar}
-                                        </div>
-                                    )}
                                 </div>
-                            </button>
+
+                                {/* Acción rápida móvil */}
+                                <div className="client-card-actions">
+                                    <div className="btn-card-action" onClick={(e) => { e.stopPropagation(); onSelectClient(cliente); }}>
+                                        <DollarSign size={18} />
+                                    </div>
+                                </div>
+                            </div>
                         );
                     })
                 ) : (
@@ -306,15 +297,22 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
                 )}
             </div>
 
-            {/* FAB */}
-            <button
-                id="btn-add-client"
-                className="fab"
-                onClick={onAddClient}
-                aria-label="Agregar cliente"
-            >
-                <Plus size={28} />
-            </button>
+            {/* Navbar Inferior (Móvil) */}
+            <nav className="bottom-nav">
+                <button className="nav-item active">
+                    <div className="nav-item-icon"><Home size={22} /></div>
+                    <span className="nav-item-label">Inicio</span>
+                </button>
+                <button className="nav-item" onClick={onAddClient}>
+                    <div className="nav-item-icon" style={{ background: 'var(--primary)', color: 'white', borderRadius: '50%', width: 44, height: 44, marginTop: -20, boxShadow: '0 4px 12px var(--primary-glow)' }}>
+                        <Plus size={28} />
+                    </div>
+                </button>
+                <button className="nav-item" onClick={() => setActiveTab('lugares')}>
+                    <div className="nav-item-icon"><BarChart3 size={22} /></div>
+                    <span className="nav-item-label">Reportes</span>
+                </button>
+            </nav>
         </>
     );
 }

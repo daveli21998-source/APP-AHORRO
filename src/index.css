@@ -49,6 +49,12 @@
   --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.7);
 
   --transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Safe Areas */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 /* ─── Reset ─────────────────────────────────────────────────── */
@@ -830,7 +836,7 @@ body {
   background: var(--surface);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   border-top: 1px solid var(--border);
-  padding: 24px 24px 40px;
+  padding: 24px 24px calc(40px + var(--safe-bottom));
   animation: sheetIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -1143,4 +1149,141 @@ body {
 
 .pending-badge:active {
   transform: translateX(-50%) scale(0.95);
+}
+
+/* ─── Bottom Navigation (Native Style) ─────────────────────── */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: rgba(13, 26, 18, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 10px calc(10px + var(--safe-bottom));
+  z-index: 400;
+  box-shadow: 0 -10px 30px rgba(0,0,0,0.5);
+}
+
+.nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 6px 0;
+  border-radius: 12px;
+}
+
+.nav-item.active {
+  color: var(--primary);
+}
+
+.nav-item-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s;
+}
+
+.nav-item.active .nav-item-icon {
+  transform: translateY(-2px);
+  filter: drop-shadow(0 0 5px var(--primary-glow));
+}
+
+.nav-item-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ─── Segmented Control (Pestañas móviles) ─────────────────── */
+.segmented-control-wrapper {
+  padding: 0 20px;
+  margin-bottom: 12px;
+}
+
+.segmented-control {
+  display: flex;
+  background: var(--surface-2);
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border-2);
+}
+
+.segmented-item {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.segmented-item.active {
+  background: var(--surface-3);
+  color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+}
+
+/* ─── Quick Actions on Cards ────────────────────────────────── */
+.client-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.btn-card-action {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-card-action:active {
+  transform: scale(0.9);
+  background: var(--primary-soft);
+}
+
+/* Native-like Active states */
+.btn-save:active,
+.quick-btn:active,
+.tipo-btn:active,
+.btn-primary:active,
+.btn-secondary:active {
+  transform: scale(0.96) !important;
+  opacity: 0.8;
+}
+
+/* Inputs optimization */
+input[type="number"],
+input[inputmode="decimal"] {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
 }
