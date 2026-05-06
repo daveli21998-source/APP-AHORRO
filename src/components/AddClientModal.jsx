@@ -3,11 +3,18 @@ import { X, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { addCliente, getLugares, deleteLugar } from '../db';
 
 export default function AddClientModal({ onClose, onSaved }) {
+    const nameInputRef = useRef(null);
     const [form, setForm] = useState({
         nombre: '', puesto: '', pasaje: '', lugar: '', tipoAhorro: '', telefono: '',
         montoNormal: '', montoPuesto: '',
         fechaRegistro: new Date().toISOString().split('T')[0]
     });
+
+    useEffect(() => {
+        // Forzar foco en nombre al abrir
+        setTimeout(() => { if (nameInputRef.current) nameInputRef.current.focus(); }, 400);
+    }, []);
+
     const [errors, setErrors] = useState({});
     const [lugares, setLugares] = useState([]);
     const [deleteError, setDeleteError] = useState('');
@@ -55,10 +62,16 @@ export default function AddClientModal({ onClose, onSaved }) {
         return errs;
     }
 
+    const [saving, setSaving] = useState(false);
+
     async function handleSubmit(e) {
         e.preventDefault();
+        if (saving) return; // Evitar doble click
+        
         const errs = validate();
         if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+        
+        setSaving(true);
         const data = {
             nombre: form.nombre.trim(), puesto: form.puesto.trim().toUpperCase(),
             pasaje: form.pasaje.trim(), lugar: form.lugar.trim(),
@@ -67,9 +80,15 @@ export default function AddClientModal({ onClose, onSaved }) {
             montoPuesto: form.montoPuesto ? parseFloat(form.montoPuesto) : null,
             fechaRegistro: form.fechaRegistro
         };
-        const nuevo = await addCliente(data);
-        onSaved(nuevo);
-        onClose();
+        
+        try {
+            const nuevo = await addCliente(data);
+            onSaved(nuevo);
+            onClose();
+        } catch (err) {
+            console.error(err);
+            setSaving(false);
+        }
     }
 
     const inp = (campo) => errors[campo] ? { borderColor: 'var(--danger)' } : {};
@@ -92,8 +111,9 @@ export default function AddClientModal({ onClose, onSaved }) {
                     <div className="form-group">
                         <label className="form-label" htmlFor="add-nombre">Nombre completo <Req /></label>
                         <input id="add-nombre" name="nombre" className="form-input"
+                            ref={nameInputRef}
                             placeholder="Ej: Mario López" value={form.nombre}
-                            onChange={handleChange} autoFocus style={inp('nombre')} />
+                            onChange={handleChange} style={inp('nombre')} />
                         {errors.nombre && <Err msg={errors.nombre} />}
                     </div>
 
@@ -195,7 +215,9 @@ export default function AddClientModal({ onClose, onSaved }) {
 
                     <div className="btn-row" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)', padding: '10px 0', borderTop: '1px solid var(--border-2)', zIndex: 10 }}>
                         <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
-                        <button type="submit" className="btn-primary" id="btn-confirm-add-client">✅ Guardar Cliente</button>
+                        <button type="submit" className="btn-primary" id="btn-confirm-add-client" disabled={saving}>
+                            {saving ? '⏳ Guardando...' : '✅ Guardar Cliente'}
+                        </button>
                     </div>
                 </form>
             </div>
@@ -207,7 +229,7 @@ export default function AddClientModal({ onClose, onSaved }) {
 function LugarSelector({ value, lugares, onChange, hasError, onDelete, deleteError }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState(value);
-    const [mode, setMode] = useState(lugares.length > 0 ? 'pick' : 'write'); // 'pick' | 'write'
+    const [mode, setMode] = useState('pick'); // 'pick' | 'write'
     const ref = useRef(null);
 
     // Cierra al hacer click fuera

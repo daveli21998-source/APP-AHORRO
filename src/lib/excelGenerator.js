@@ -1,12 +1,9 @@
 import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
-/**
- * Genera un archivo Excel con el diseño de calendario profesional
- * @param {string} title - Nombre del archivo (ej: PSJ1)
- * @param {Array} clientes - Lista de clientes con sus pagos
- */
-export async function generateExcelPasaje(title, clientes) {
+// Función para preparar el buffer del Excel (Trabajo pesado en segundo plano)
+export async function prepareExcelBuffer(title, clientes) {
     const workbook = new ExcelJS.Workbook();
     
     if (clientes.length === 0) {
@@ -14,12 +11,10 @@ export async function generateExcelPasaje(title, clientes) {
     }
 
     const seenNames = new Set();
+    const year = new Date().getFullYear();
 
     for (const cliente of clientes) {
-        // Limpiar nombre para que sea un nombre de pestaña válido en Excel
         let cleanName = cliente.nombre.replace(/[\[\]\*\?\:\\\/]/g, '').substring(0, 31).trim() || 'Cliente';
-        
-        // Manejar duplicados
         let finalName = cleanName;
         let counter = 1;
         while (seenNames.has(finalName.toLowerCase())) {
@@ -31,122 +26,183 @@ export async function generateExcelPasaje(title, clientes) {
 
         const sheet = workbook.addWorksheet(finalName);
         
-        // Configuración de columnas (Ancho)
-        // Cada mes usa 3 columnas. 3 meses por fila = 9 columnas principales + espacios
-        sheet.columns = [
-            { width: 4 }, { width: 4 }, { width: 12 }, // Mes 1
-            { width: 2 }, // Espacio
-            { width: 4 }, { width: 4 }, { width: 12 }, // Mes 2
-            { width: 2 }, // Espacio
-            { width: 4 }, { width: 4 }, { width: 12 }, // Mes 3
-            { width: 2 }, // Espacio
-            { width: 4 }, { width: 4 }, { width: 12 }, // Mes 4
-        ];
+        // Ajuste de columnas para que se vea igual a la foto
+        for (let i = 1; i <= 24; i++) {
+            sheet.getColumn(i).width = 9; 
+        }
+        sheet.getColumn(25).width = 2; // Espacio
+        sheet.getColumn(26).width = 18; // Total Box
+        sheet.getColumn(27).width = 18;
 
-        // Estilos Comunes
-        const borderThin = {
-            top: { style: 'thin' },
-            left: { style: 'thin' },
-            bottom: { style: 'thin' },
-            right: { style: 'thin' }
-        };
-
-        const headerFill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFFFFF00' } // Amarillo
-        };
-
-        const totalFill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFD9EAD3' } // Verde claro o Gris azulado
-        };
+        const colAmarillo = 'FFf1c232'; // Amarillo exacto de la App
+        const colAzulOscuro = 'FF2c3e50'; // Azul exacto
+        const colAmarilloSuave = 'FFfff2cc'; // Para pagos
         
-        // Dibujar 12 meses en una cuadrícula de 3 columnas x 4 filas
-        const meses = [
-            'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
-            'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'
-        ];
+        const solidFill = (color) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: color } });
+        const borderThin = {
+            top: { style: 'thin', color: { argb: 'FFD5D8DC' } },
+            left: { style: 'thin', color: { argb: 'FFD5D8DC' } },
+            bottom: { style: 'thin', color: { argb: 'FFD5D8DC' } },
+            right: { style: 'thin', color: { argb: 'FFD5D8DC' } }
+        };
 
-        let totalGeneral = 0;
+        // 1. Encabezado Principal (Nombre)
+        sheet.mergeCells('A1:X1');
+        const titleCell = sheet.getCell('A1');
+        titleCell.value = cliente.nombre.toUpperCase();
+        titleCell.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
+        titleCell.fill = solidFill(colAmarillo);
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
+        // 2. Info Puesto / Pasaje / Modo
+        sheet.mergeCells('A2:D2');
+        const pCell = sheet.getCell('A2');
+        pCell.value = "PUESTO: " + (cliente.puesto || "-");
+        pCell.font = { bold: true, color: { argb: 'FF2c3e50' } };
+        pCell.fill = solidFill('FFcfe2f3');
+        pCell.alignment = { horizontal: 'center' };
+
+        sheet.mergeCells('E2:H2');
+        const pasCell = sheet.getCell('E2');
+        pasCell.value = "PASAJE: " + (cliente.pasaje || "-");
+        pasCell.font = { bold: true };
+        pasCell.fill = solidFill(colAmarilloSuave);
+        pasCell.alignment = { horizontal: 'center' };
+
+        // 3. Meses (6x2)
+        const meses = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+        let subtotalRefs = [];
+        
         for (let m = 0; m < 12; m++) {
-            const rowIndex = Math.floor(m / 3) * 40 + 4; // Espaciado vertical
-            const colStart = (m % 3) * 4 + 1;
-            
-            const monthName = meses[m];
-            
-            // Header del Mes
-            const monthHeaderCell = sheet.getRow(rowIndex).getCell(colStart);
-            sheet.mergeCells(rowIndex, colStart, rowIndex, colStart + 2);
-            monthHeaderCell.value = monthName;
-            monthHeaderCell.alignment = { horizontal: 'center', vertical: 'middle' };
-            monthHeaderCell.font = { bold: true };
-            monthHeaderCell.border = borderThin;
-            monthHeaderCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+            const rowBase = Math.floor(m / 6) * 38 + 4; 
+            const colBase = (m % 6) * 4 + 1;
+            const daysInMonth = new Date(year, m + 1, 0).getDate();
 
-            // Subheaders: N° | | MONTO
-            const subHeaderRow = sheet.getRow(rowIndex + 1);
-            subHeaderRow.getCell(colStart).value = 'N°';
-            subHeaderRow.getCell(colStart + 2).value = 'MONTO';
-            
-            [0, 1, 2].forEach(i => {
-                const cell = subHeaderRow.getCell(colStart + i);
-                cell.border = borderThin;
-                cell.alignment = { horizontal: 'center' };
-                cell.font = { size: 9, bold: true };
-            });
+            // Cabecera Mes
+            sheet.mergeCells(rowBase, colBase, rowBase, colBase + 1);
+            const mHeader = sheet.getCell(rowBase, colBase);
+            mHeader.value = meses[m];
+            mHeader.fill = solidFill(colAzulOscuro);
+            mHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            mHeader.alignment = { horizontal: 'center' };
 
-            // Días 1-31
-            let totalMes = 0;
+            // Sub-cabeceras Día/Monto
+            const diaH = sheet.getCell(rowBase + 1, colBase);
+            diaH.value = "DÍA";
+            diaH.fill = solidFill('FFf3f3f3');
+            diaH.font = { size: 8, bold: true };
+            diaH.alignment = { horizontal: 'center' };
+
+            const monH = sheet.getCell(rowBase + 1, colBase + 1);
+            monH.value = "MONTO";
+            monH.fill = solidFill('FFf3f3f3');
+            monH.font = { size: 8, bold: true };
+            monH.alignment = { horizontal: 'center' };
+
+            // Días del mes
             for (let d = 1; d <= 31; d++) {
-                const dayRow = sheet.getRow(rowIndex + 1 + d);
-                dayRow.getCell(colStart).value = d;
-                dayRow.getCell(colStart).border = borderThin;
-                dayRow.getCell(colStart).alignment = { horizontal: 'center' };
-                
-                dayRow.getCell(colStart + 1).border = borderThin;
-                
-                const montoCell = dayRow.getCell(colStart + 2);
-                montoCell.border = borderThin;
-                
-                // Buscar pago para este día/mes
-                const year = new Date().getFullYear();
-                const fechaStr = `${year}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const pago = cliente.pagos?.find(p => p.fecha === fechaStr);
-                if (pago) {
-                    montoCell.value = `S/ ${pago.monto.toFixed(2)}`;
-                    totalMes += Number(pago.monto);
+                const r = rowBase + 1 + d;
+                const cD = sheet.getCell(r, colBase);
+                const cM = sheet.getCell(r, colBase + 1);
+                cD.border = borderThin;
+                cM.border = borderThin;
+
+                if (d <= daysInMonth) {
+                    cD.value = d;
+                    cD.alignment = { horizontal: 'center' };
+                    const fechaStr = `${year}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                    const p = (cliente.pagos || []).find(pay => pay.fecha === fechaStr);
+                    if (p) {
+                        cM.value = Number(p.monto);
+                        cM.font = { bold: true };
+                        cD.fill = solidFill(colAmarilloSuave);
+                        cM.fill = solidFill(colAmarilloSuave);
+                    }
+                } else {
+                    cD.fill = solidFill('FFF9F9F9');
+                    cM.fill = solidFill('FFF9F9F9');
                 }
             }
 
-            // Total del Mes
-            const totalRowIndex = rowIndex + 33;
-            const totalHeaderCell = sheet.getRow(totalRowIndex).getCell(colStart + 1);
-            const totalValueCell = sheet.getRow(totalRowIndex).getCell(colStart + 2);
-            
-            totalHeaderCell.value = 'TOTAL';
-            totalHeaderCell.border = borderThin;
-            totalHeaderCell.font = { bold: true, size: 9 };
-            
-            totalValueCell.value = `S/ ${totalMes.toFixed(2)}`;
-            totalValueCell.border = borderThin;
-            totalValueCell.font = { bold: true };
-            totalValueCell.fill = totalFill;
-            
-            totalGeneral += totalMes;
+            // Total Mes
+            sheet.mergeCells(rowBase + 33, colBase, rowBase + 33, colBase + 1);
+            const sumCell = sheet.getCell(rowBase + 33, colBase);
+            const colLet = sheet.getColumn(colBase + 1).letter;
+            sumCell.value = { formula: `SUM(${colLet}${rowBase + 2}:${colLet}${rowBase + 32})` };
+            sumCell.fill = solidFill(colAmarillo);
+            sumCell.font = { bold: true };
+            sumCell.alignment = { horizontal: 'center' };
+            const subtotalColLet = sheet.getColumn(colBase).letter;
+            subtotalRefs.push(`${subtotalColLet}${rowBase + 33}`);
         }
 
-        // Gran Total al Final
-        const grandTotalRow = sheet.getRow(165); // Posición arbitraria al final
-        sheet.mergeCells(165, 1, 170, 12);
-        const grandTotalCell = grandTotalRow.getCell(1);
-        grandTotalCell.value = `S/ ${totalGeneral.toFixed(2)}`;
-        grandTotalCell.font = { size: 48, bold: true };
-        grandTotalCell.alignment = { horizontal: 'right', vertical: 'middle' };
+        // 4. Caja de Total Acumulado (La de la derecha)
+        sheet.mergeCells('Z2:AA2');
+        const tTitle = sheet.getCell('Z2');
+        tTitle.value = "TOTAL ACUMULADO";
+        tTitle.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        tTitle.fill = solidFill(colAzulOscuro);
+        tTitle.alignment = { horizontal: 'center', vertical: 'middle' };
+
+        sheet.mergeCells('Z3:AA5');
+        const tVal = sheet.getCell('Z3');
+        tVal.value = { formula: subtotalRefs.join('+') };
+        tVal.numFmt = '"S/" #,##0.00';
+        tVal.font = { size: 24, bold: true };
+        tVal.fill = solidFill(colAmarillo);
+        tVal.alignment = { horizontal: 'center', vertical: 'middle' };
+        
+        // Bordes gruesos para el total (Caja de la derecha)
+        const totalCells = ['Z2', 'AA2', 'Z3', 'AA3', 'Z4', 'AA4', 'Z5', 'AA5'];
+        totalCells.forEach(ref => {
+            sheet.getCell(ref).border = {
+                top: {style:'medium'}, left: {style:'medium'}, bottom: {style:'medium'}, right: {style:'medium'}
+            };
+        });
     }
 
-    const buffer = await workbook.xlsx.writeBuffer();
-    saveAs(new Blob([buffer]), `${title}.xlsx`);
+    return await workbook.xlsx.writeBuffer();
+}
+
+// Función principal para compartir (WhatsApp/Telegram)
+export async function generateExcelPasaje(title, clientes, preGeneratedBuffer = null) {
+    const fileName = `${title}.xlsx`;
+    let buffer = preGeneratedBuffer || await prepareExcelBuffer(title, clientes);
+
+    try {
+        const uint8 = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+        const base64 = btoa(binary);
+        
+        // GUARD DE SEGURIDAD: Si estamos en PC, descargar directamente. Si es móvil, compartir.
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+        if (isMobile) {
+            // Guardar archivo temporal
+            const savedFile = await Filesystem.writeFile({
+                path: fileName,
+                data: base64,
+                directory: Directory.Cache
+            });
+
+            // COMPARTIR NATIVO (WhatsApp / Telegram)
+            await Share.share({
+                title: 'Reporte de Ahorros',
+                files: [savedFile.uri],
+                dialogTitle: 'Enviar por...'
+            });
+        } else {
+            // DESCARGA DIRECTA (PC / Laptop)
+            const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    } catch (err) {
+        console.error('Error al generar/compartir Excel:', err);
+    }
 }

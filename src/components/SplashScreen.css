@@ -1,0 +1,183 @@
+.splash-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #080d0a;
+    z-index: 1000000;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.splash-container.fade-out {
+    opacity: 0;
+    transform: scale(1.02);
+    transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+}
+
+.splash-background-glow {
+    position: absolute;
+    width: 150%;
+    height: 150%;
+    background: radial-gradient(circle at center, rgba(16, 185, 129, 0.06) 0%, transparent 70%);
+    animation: background-pulse-slow 8s infinite ease-in-out;
+}
+
+.splash-content {
+    position: relative;
+    width: 100%;
+    height: 80vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    padding: 60px 20px;
+    z-index: 2;
+}
+
+/* Header */
+.splash-header {
+    text-align: center;
+    animation: slide-down-fade 1.2s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.splash-title-premium {
+    font-size: 3.5rem;
+    font-weight: 950;
+    color: #ffffff;
+    letter-spacing: 12px;
+    margin: 0;
+    text-indent: 12px;
+    background: linear-gradient(180deg, #ffffff 30%, #a7f3d0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+}
+
+.title-underline {
+    width: 60px;
+    height: 4px;
+    background: var(--primary);
+    margin: 12px auto 0;
+    border-radius: 2px;
+    box-shadow: 0 0 15px var(--primary-glow);
+}
+
+/* Central Eyes Section (Version Natural) */
+.logo-section {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.logo-aura {
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, transparent 65%);
+    mix-blend-mode: screen;
+    animation: aura-sway 15s infinite ease-in-out;
+}
+
+.splash-eyes-svg-natural {
+    filter: drop-shadow(0 10px 25px rgba(0,0,0,0.6));
+    z-index: 3;
+}
+
+/* Eye Animations Natural */
+.eye-group-left, .eye-group-right {
+    transform-origin: center;
+    animation: eye-blink-natural 5s infinite ease-in-out;
+}
+
+.eye-group-right {
+    animation-delay: 0.15s;
+}
+
+.pupil-wrapper-left, .pupil-wrapper-right {
+    animation: pupil-scan-subtle 8s infinite ease-in-out;
+}
+
+.pupil-wrapper-right {
+    animation-delay: 0.08s;
+}
+
+@keyframes eye-blink-natural {
+    0%, 47%, 53%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.02); }
+}
+
+@keyframes pupil-scan-subtle {
+    0%, 100% { transform: translate(0, 0); }
+    25% { transform: translate(-3px, 1px); }
+    50% { transform: translate(2px, -1px); }
+    75% { transform: translate(1px, 2px); }
+}
+
+/* Footer Controlado */
+.splash-footer-premium {
+    width: 100%;
+    max-width: 250px;
+    text-align: center;
+    animation: slide-up-fade 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.5s backwards;
+}
+
+.splash-tagline {
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: var(--primary);
+    letter-spacing: 4px;
+    margin-bottom: 24px;
+    opacity: 0.7;
+}
+
+.premium-loader {
+    width: 100%;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 1px;
+    overflow: hidden;
+}
+
+.premium-loader-line {
+    width: 60px;
+    height: 100%;
+    background: var(--primary);
+    box-shadow: 0 0 10px var(--primary-glow);
+    animation: loader-slide-smooth 1.8s infinite ease-in-out;
+}
+
+/* Base Animations */
+@keyframes background-pulse-slow {
+    0%, 100% { transform: scale(1); opacity: 0.06; }
+    50% { transform: scale(1.05); opacity: 0.1; }
+}
+
+@keyframes aura-sway {
+    0%, 100% { transform: translate(0,0) rotate(0deg); }
+    33% { transform: translate(10px, -10px) rotate(5deg); }
+    66% { transform: translate(-10px, 10px) rotate(-5deg); }
+}
+
+@keyframes slide-down-fade {
+    from { transform: translateY(-30px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-up-fade {
+    from { transform: translateY(30px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes loader-slide-smooth {
+    0% { transform: translateX(-150%); }
+    100% { transform: translateX(450%); }
+}

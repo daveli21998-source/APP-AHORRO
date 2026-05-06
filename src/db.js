@@ -1,373 +1,628 @@
 import { supabase } from './lib/supabase';
+import db, {
+    enqueue, dequeueNext, markSyncing, markSuccess, markError, requeueErrors, requeueStale,
+    getPendingCount, getDrivePendingCount, getAllQueueOps, remapClientIds,
+    enqueueDrive, drainDriveQueue, removeDriveOps,
+    cacheClients, getCachedClients,
+    cachePayments, getCachedPayments, getCachedPaymentsByClient,
+    cacheTodayPayments, getCachedTodayPayments,
+    cacheLugares, getCachedLugares,
+    migrateFromLocalStorage, getRecentLogs,
+    SYNC_STATUS,
+} from './lib/dexie';
 
-// ─── OFFLINE SYNC SYSTEM ──────────────────────────────────────
-const OFFLINE_QUEUE_KEY = 'offline_queue';
+// Re-exportar para uso externo
+export { supabase, getPendingCount, getDrivePendingCount, getRecentLogs, migrateFromLocalStorage, requeueErrors, SYNC_STATUS };
 
-function getQueue() {
-    return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxLIRhqpXmAQyPQUWy3GkSfTNuFCU9_-Zik0ZamTYbngNLcRyT4N67qZMTjhaEeoYVA/exec';
+
+// Guard de sincronización (Bug 2 fix: declarado explícitamente)
+let isSyncing = false;
+
+// Helper para detectar conexión real
+export function isUserOnline() {
+    return navigator.onLine;
 }
 
-function saveQueue(queue) {
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+// Verificación real de conectividad (ping a Supabase)
+let _lastOnlineCheck = 0;
+let _lastOnlineResult = navigator.onLine;
+export async function checkRealConnectivity(force = false) {
+    const now = Date.now();
+    // No verificar más de una vez cada 2 segundos (a menos que sea forzado)
+    if (!force && now - _lastOnlineCheck < 2000) return _lastOnlineResult;
+    _lastOnlineCheck = now;
+    if (!navigator.onLine) { _lastOnlineResult = false; return false; }
+    try {
+        const resp = await fetchWithTimeout(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/`, { 
+            method: 'HEAD', 
+            headers: { 
+                'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+            },
+            timeout: 5000
+        });
+        _lastOnlineResult = resp.ok || (resp.status >= 200 && resp.status < 500); 
+        return _lastOnlineResult;
+    } catch {
+        _lastOnlineResult = false;
+        return false;
+    }
 }
 
-function addToQueue(operation) {
-    const queue = getQueue();
-    const id_local = (typeof crypto !== 'undefined' && crypto.randomUUID) 
-        ? crypto.randomUUID() 
-        : `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+async function fetchWithTimeout(resource, options = {}) {
+    const { timeout = 30000 } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(resource, { ...options, signal: controller.signal });
+        return response;
+    } finally {
+        clearTimeout(id);
+    }
+}
+
+const recentlyDeletedIds = new Set();
+
+/**
+ * Genera un ID único (UUID) para cada registro local.
+ * Se usa el prefijo 'local-' para mantener compatibilidad con el resto de la app.
+ */
+function generateId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+async function addToQueue(operation) {
+    // El id_local para Dexie puede tener el prefijo 'local-'
+    // Pero el id en data DEBE ser un UUID limpio para Supabase
+    const id_local = operation.id_local || `local-${generateId()}`;
+    await enqueue({
+        type: operation.type,
+        data: operation.data,
+        id_ref: operation.id_ref || operation.id || null,
+        client_ref: operation.client_ref || operation.data?.cliente_id || null,
+        id_local,
+    });
+}
+
+
+/**
+ * Helper para identificar si un ID es local (aún no sincronizado)
+ */
+function isLocalId(id) {
+    if (!id) return false;
+    const s = String(id);
+    return s.startsWith('local-') || s.startsWith('id-') || s.length > 30; // UUIDs suelen ser > 30 chars
+}
+
+async function resolveClientMeta(clientId) {
+    try {
+        if (isUserOnline() && clientId && !isLocalId(clientId)) {
+            const { data } = await supabase.from('ahorros_clientes').select('nombre, pasaje, tipo_ahorro').eq('id', clientId).single();
+            if (data) return data;
+        }
+    } catch (e) {}
+    const cached = await getCachedClients();
+    const found = cached.find(c => c.id === clientId);
+    return found ? { nombre: found.nombre, pasaje: found.pasaje, tipo_ahorro: found.tipo_ahorro } : { nombre: null, pasaje: null, tipo_ahorro: null };
+}
+
+
+/**
+ * Motor Experto: Maneja una cola persistente para Google Drive.
+ * Si falla, se queda guardado para el siguiente inicio de la App.
+ */
+let isDriveSyncing = false;
+async function processDriveQueue() {
+    if (!isUserOnline() || isDriveSyncing) return;
+    const pending = await db.drive_queue.toArray();
+    if (pending.length === 0) {
+        window.dispatchEvent(new CustomEvent('offline-queue-updated', { 
+            detail: { count: await getTotalPendingCount() } 
+        }));
+        return;
+    }
+
+    isDriveSyncing = true;
+    console.log(`[DriveSync] Procesando mochila de respaldo: ${pending.length} pendientes.`);
     
-    queue.push({ ...operation, id_local, timestamp: new Date().toISOString() });
-    saveQueue(queue);
-    
-    // Disparar evento para que la UI se entere de que hay algo pendiente
-    window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: queue.length } }));
+    // Agrupamos por cliente para no enviar 100 peticiones
+    const clients = new Map();
+    pending.forEach(p => {
+        const key = p.client_id;
+        if (!clients.has(key)) {
+            clients.set(key, { action: p.action, id: p.client_id, name: p.client_name });
+        } else if (p.action === 'delete_client') {
+            clients.set(key, { action: 'delete_client', id: p.client_id, name: p.client_name });
+        }
+    });
+
+    const operations = Array.from(clients.values()).map(c => ({
+        action: c.action || 'sync_client',
+        client_id: String(c.id).replace('local-', ''),
+        client_name: c.name
+    }));
+
+    try {
+        await fetch(GOOGLE_SCRIPT_URL, { 
+            method: 'POST', 
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ batch: true, operations })
+        });
+        
+        // Si llegamos aquí, borramos de la mochila
+        const ids = pending.map(p => p.id);
+        await db.drive_queue.bulkDelete(ids);
+        console.log('[DriveSync] ¡Mochila vaciada con éxito!');
+        window.dispatchEvent(new CustomEvent('drive-sync-success'));
+    } catch (err) {
+        console.error('[DriveSync] Error al vaciar mochila, se reintentará luego:', err);
+    } finally {
+        isDriveSyncing = false;
+        window.dispatchEvent(new CustomEvent('offline-queue-updated', { 
+            detail: { count: await getTotalPendingCount() } 
+        }));
+    }
+}
+
+export async function forceSyncClientToGoogleDrive(clientId) {
+    await db.drive_queue.add({
+        client_id: clientId,
+        action: 'sync_client',
+        timestamp: Date.now()
+    });
+    processDriveQueue();
+    return true;
+}
+
+// Iniciar proceso de vaciado de mochila al cargar y al volver a estar online
+if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => {
+        processDriveQueue();
+        syncOfflineData();
+    });
+
+    // EXPERTO: Sincronizar automáticamente cuando el usuario vuelve a la App
+    window.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            console.log('[AutoSync] Usuario regresó a la App, activando sincronización...');
+            processDriveQueue();
+            syncOfflineData();
+        }
+    });
+
+    // NOTA: El intervalo de sincronización periódica se maneja únicamente desde App.jsx (cada 15s)
+    // para evitar race conditions por doble sync concurrente.
+
+    // Ejecutar al inicio tras un breve delay
+    setTimeout(() => {
+        processDriveQueue();
+        syncOfflineData();
+    }, 3000);
+}
+
+export async function clearSyncQueue() {
+    try {
+        await db.sync_queue.clear();
+        await db.drive_queue.clear();
+        window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: 0 } }));
+        return true;
+    } catch (err) {
+        return false;
+    }
 }
 
 export async function syncOfflineData() {
-    if (!navigator.onLine) return { synced: 0, failed: 0 };
+    if (!isUserOnline()) return { synced: 0, failed: 0 };
     
-    let queue = getQueue();
-    if (queue.length === 0) return { synced: 0, failed: 0 };
+    // Recuperar operaciones zombie (atascadas en 'syncing' por más de 60s)
+    await requeueStale(60000);
 
-    console.log(`Starting sync of ${queue.length} items...`);
+    // Auto-desbloqueo de emergencia (más agresivo: 30s)
+    if (isSyncing && Date.now() - (window._lastSyncStart || 0) > 30000) {
+        isSyncing = false;
+    }
+    
+    if (isSyncing) return { synced: 0, failed: 0 };
+
+    isSyncing = true;
+    window._lastSyncStart = Date.now();
     let synced = 0;
     let failed = 0;
-    const remaining = [];
-    
-    // Mapeo de IDs locales a IDs reales de Supabase
-    const idMap = {};
+    const clientsToSyncToSheets = new Set();
 
-    for (let i = 0; i < queue.length; i++) {
-        const op = queue[i];
-        try {
-            let res;
-            
-            // Si la operación depende de un cliente que se acaba de crear, actualizar su ID
-            if (op.data && op.data.cliente_id && idMap[op.data.cliente_id]) {
-                op.data.cliente_id = idMap[op.data.cliente_id];
-            }
-            if (op.id && idMap[op.id]) {
-                op.id = idMap[op.id];
-            }
+    try {
+        // Solo reintentamos errores 3 veces para no trabar la App
+        await requeueErrors(3);
+        const idMap = {};
+        const totalInitial = await getPendingCount();
+        
+        window.dispatchEvent(new CustomEvent('sync-progress', { 
+            detail: { remaining: totalInitial, total: totalInitial, phase: 'start' } 
+        }));
 
-            if (op.type === 'INSERT_CLIENTE') {
-                res = await supabase.from('ahorros_clientes').insert([op.data]).select().single();
-                if (!res.error && res.data) {
-                    const realId = res.data.id;
-                    idMap[op.id_local] = realId; 
-                    
-                    // IMPORTANTE: Actualizar el RESTO de la cola para que los pagos 
-                    // que vengan después ya tengan el ID real.
-                    for (let j = i + 1; j < queue.length; j++) {
-                        if (queue[j].data && queue[j].data.cliente_id === op.id_local) {
-                            queue[j].data.cliente_id = realId;
-                        }
+        let loopLimit = 100; // Evitar bucles infinitos
+        while (loopLimit > 0) {
+            loopLimit--;
+            const op = await dequeueNext();
+            if (!op) break;
+
+            await markSyncing(op.id);
+            try {
+                let res;
+                // Remapear IDs
+                if (op.data?.cliente_id && idMap[op.data.cliente_id]) op.data.cliente_id = idMap[op.data.cliente_id];
+                if (op.id_ref && idMap[op.id_ref]) op.id_ref = idMap[op.id_ref];
+
+                if (op.type === 'INSERT_CLIENTE') {
+                    const cleanId = String(op.id_local).replace('local-', '');
+                    res = await supabase.from('ahorros_clientes').upsert([{ ...op.data, id: cleanId }]).select().single();
+                    if (!res.error && res.data) {
+                        idMap[op.id_local] = res.data.id;
+                        await remapClientIds(op.id_local, res.data.id);
+                        // Reemplazar cliente local (pending) por el real de Supabase
+                        await db.clients_cache.delete(op.id_local);
+                        await db.clients_cache.put(mapCliente(res.data));
+                        clientsToSyncToSheets.add(res.data.id);
                     }
+                } else if (op.type === 'INSERT_PAGO') {
+                    let cId = op.data.cliente_id;
+                    if (isLocalId(cId) && idMap[cId]) cId = idMap[cId];
+                    const cleanCId = String(cId).replace('local-', '');
+                    const cleanId = String(op.id_local).replace('local-', '');
+                    
+                    const paymentData = { ...op.data, id: cleanId, cliente_id: cleanCId };
+                    res = await supabase.from('ahorros_pagos').upsert([paymentData]);
+                    
+                    if (!res?.error) {
+                        // Limpiar pago local (pending) y reemplazar con el real
+                        if (op.id_local) {
+                            await db.payments_cache.delete(op.id_local);
+                            await db.payments_cache.put({ ...paymentData });
+                        }
+                        clientsToSyncToSheets.add(cleanCId);
+                    }
+                } else if (op.type === 'UPDATE_CLIENTE') {
+                    res = await supabase.from('ahorros_clientes').update(op.data).eq('id', op.id_ref);
+                    if (!res?.error) clientsToSyncToSheets.add(op.id_ref);
+                } else if (op.type === 'DELETE_CLIENTE') {
+                    const targetId = op.id_ref || String(op.id_local).replace('local-', '');
+                    res = await supabase.from('ahorros_clientes').delete().eq('id', targetId);
+                    if (!res?.error) clientsToSyncToSheets.add({ id: targetId, action: 'delete_client', name: op.data?.nombre });
+                } else if (op.type === 'DELETE_PAGO') {
+                    const targetId = op.id_ref || String(op.id_local).replace('local-', '');
+                    res = await supabase.from('ahorros_pagos').delete().eq('id', targetId);
+                    if (!res?.error && op.data?.cliente_id) clientsToSyncToSheets.add(op.data.cliente_id);
+                } else if (op.type === 'INSERT_LUGAR') {
+                    res = await supabase.from('ahorros_lugares').upsert([{ nombre: op.data.nombre }], { onConflict: 'nombre' });
+                } else if (op.type === 'DELETE_LUGAR') {
+                    res = await supabase.from('ahorros_lugares').delete().eq('nombre', op.data.nombre);
                 }
-            } else if (op.type === 'INSERT_PAGO') {
-                // Doble chequeo por si acaso
-                if (String(op.data.cliente_id).startsWith('local-') && idMap[op.data.cliente_id]) {
-                    op.data.cliente_id = idMap[op.data.cliente_id];
-                }
-                res = await supabase.from('ahorros_pagos').insert([op.data]);
-            } else if (op.type === 'UPDATE_CLIENTE') {
-                res = await supabase.from('ahorros_clientes').update(op.data).eq('id', op.id);
-            } else if (op.type === 'DELETE_CLIENTE') {
-                res = await supabase.from('ahorros_clientes').delete().eq('id', op.id);
-            } else if (op.type === 'DELETE_PAGO') {
-                res = await supabase.from('ahorros_pagos').delete().eq('id', op.id);
+
+                if (res?.error && res.error.code !== '23505') throw res.error;
+                
+                await markSuccess(op.id);
+                synced++;
+            } catch (err) {
+                console.error(`[Sync] Falló op ${op.id}, saltando...`, err);
+                await markError(op.id, err.message || String(err));
+                failed++;
+                continue; 
             }
-
-            if (res?.error) throw res.error;
-            synced++;
-        } catch (err) {
-            console.error('Failed to sync operation:', op, err);
-            remaining.push(op);
-            failed++;
         }
+
+        if (clientsToSyncToSheets.size > 0) {
+            for (const item of clientsToSyncToSheets) {
+                const clientObj = typeof item === 'string' ? { id: item, action: 'sync_client' } : item;
+                await db.drive_queue.add({
+                    client_id: clientObj.id,
+                    action: clientObj.action,
+                    client_name: clientObj.name,
+                    timestamp: Date.now()
+                });
+            }
+            processDriveQueue();
+        }
+        
+    } catch (err) {
+        console.error('[Sync] Error crítico:', err);
+    } finally {
+        isSyncing = false;
+        window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: await getTotalPendingCount() } }));
     }
-
-    saveQueue(remaining);
-    window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: remaining.length } }));
-    
-    // Si hubo éxitos pero quedaron fallos, avisar a la UI para refrescar la lista
-    if (synced > 0) window.dispatchEvent(new CustomEvent('sync-success'));
-
     return { synced, failed };
 }
 
-// ─── CLIENTES ────────────────────────────────────────────────
-export async function getClientes() {
-    const { data, error } = await supabase
-        .from('ahorros_clientes')
-        .select('*')
-        .order('nombre');
-    if (error) {
-        console.error('Error fetching clientes:', error);
-        return [];
-    }
-    return data.map(mapCliente);
+export async function getTotalPendingCount() {
+    try {
+        const sup = await getPendingCount();
+        const drive = await db.drive_queue.count();
+        return sup + drive;
+    } catch (e) { return 0; }
 }
 
 function mapCliente(c) {
     if (!c) return null;
-    return {
-        ...c,
-        tipoAhorro: c.tipo_ahorro,
-        fechaRegistro: c.fecha_register || c.fecha_registro,
-        montoNormal: c.monto_normal,
-        montoPuesto: c.monto_puesto,
-    };
+    return { ...c, tipoAhorro: c.tipo_ahorro, fechaRegistro: c.fecha_register || c.fecha_registro, montoNormal: c.monto_normal, montoPuesto: c.monto_puesto };
 }
 
 export async function getClientesConMetaData() {
-    let finalResult = [];
-    const today = new Date().toISOString().split('T')[0];
-
+    let clients = [];
+    let payments = [];
+    const today = getLocalIsoDate();
+    
     try {
-        if (!navigator.onLine) throw new Error('Offline');
+        // EXPERTO: Siempre preferimos la base local para rapidez, 
+        // y actualizamos desde Supabase en segundo plano sin bloquear la UI.
+        const cachedClients = await getCachedClients();
+        const cachedPayments = await getCachedPayments();
         
-        const { data: clientes, error: errC } = await supabase
-            .from('ahorros_clientes')
-            .select('*')
-            .order('nombre');
-        if (errC) throw errC;
-
-        const { data: pagosHoy, error: errP } = await supabase
-            .from('ahorros_pagos')
-            .select('cliente_id')
-            .eq('fecha', today);
-        if (errP) throw errP;
-
-        const { data: todosLosPagos, error: errT } = await supabase
-            .from('ahorros_pagos')
-            .select('cliente_id, monto');
-        if (errT) throw errT;
-
-        const pagosHoySet = new Set(pagosHoy.map(p => p.cliente_id));
-        const totalesMap = todosLosPagos.reduce((acc, p) => {
-            acc[p.cliente_id] = (acc[p.cliente_id] || 0) + Number(p.monto);
-            return acc;
-        }, {});
-
-        finalResult = clientes.map(c => ({
-            ...mapCliente(c),
-            pagadoHoy: pagosHoySet.has(c.id),
-            totalAcumulado: totalesMap[c.id] || 0
-        }));
-
-        localStorage.setItem('clientes_cache', JSON.stringify(finalResult));
+        if (isUserOnline()) {
+            // SEGURIDAD: Solo refrescar caché si NO hay operaciones pendientes.
+            // Si hay pendientes, Supabase aún no tiene esos datos y el refresh
+            // podría sobrescribir registros locales.
+            const pendingOps = await getPendingCount();
+            if (pendingOps === 0) {
+                supabase.from('ahorros_clientes').select('*').then(({data}) => data && cacheClients(data.map(mapCliente)));
+                supabase.from('ahorros_pagos').select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real').then(({data}) => data && cachePayments(data));
+            }
+        }
+        
+        clients = cachedClients.length > 0 ? cachedClients : [];
+        payments = cachedPayments.length > 0 ? cachedPayments : [];
     } catch (err) {
-        console.warn('Using cache for clientes:', err.message);
-        const cache = localStorage.getItem('clientes_cache');
-        finalResult = cache ? JSON.parse(cache) : [];
+        clients = await getCachedClients();
+        payments = await getCachedPayments();
     }
 
-    // ─── MEZCLA CON COLA OFFLINE ──────────────────────────────
-    const queue = getQueue();
-    if (queue.length === 0) return finalResult;
-
-    const deletions = new Set(queue.filter(op => op.type === 'DELETE_CLIENTE').map(op => op.id));
+    const queue = await getAllQueueOps();
+    const deletions = new Set(queue.filter(op => op.type === 'DELETE_CLIENTE').map(op => op.id_ref));
     const updates = queue.filter(op => op.type === 'UPDATE_CLIENTE');
     const newClients = queue.filter(op => op.type === 'INSERT_CLIENTE');
     const newPagos = queue.filter(op => op.type === 'INSERT_PAGO');
-    const deletedPagos = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id));
+    const deletedPagos = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id_ref));
 
-    // 1. Filtrar eliminados y Aplicar updates
-    let merged = finalResult
-        .filter(c => !deletions.has(c.id))
-        .map(c => {
-            const up = updates.find(op => op.id === c.id);
-            if (up) {
-                return { ...c, ...mapCliente({ ...c, ...up.data }) };
-            }
-            return c;
-        });
+    // Combinar pagos (Base + Cola - Borrados - Duplicados)
+    const pendingPagoIds = new Set(newPagos.map(op => op.id_local));
+    const allPayments = [
+        ...payments.filter(p => {
+            if (deletedPagos.has(p.id)) return false;
+            // Si el pago es un ID local y ya está en la cola, evitamos duplicar lo que ya viene de Supabase
+            if (isLocalId(p.id) && pendingPagoIds.has(p.id)) return false;
+            return true;
+        }),
+        ...newPagos.map(op => ({ ...op.data, id: op.id_local, status: 'pending' }))
+    ];
 
-    // 2. Agregar nuevos clientes pendientes
-    newClients.forEach(nc => {
-        merged.push({
-            ...mapCliente(nc.data),
-            id: nc.id_local,
-            status: 'pending',
-            pagadoHoy: false,
-            totalAcumulado: 0
-        });
-    });
+    // Calcular totales
+    const totals = allPayments.reduce((acc, p) => {
+        if (!acc[p.cliente_id]) acc[p.cliente_id] = { total: 0, normal: 0, puesto: 0, payToday: new Set() };
+        const m = Number(p.monto);
+        acc[p.cliente_id].total += m;
+        if (p.tipo === 'puesto') acc[p.cliente_id].puesto += m; else acc[p.cliente_id].normal += m;
+        if (p.fecha === today) acc[p.cliente_id].payToday.add(p.tipo || 'normal');
+        return acc;
+    }, {});
 
-    // 3. Recalcular totales con pagos pendientes
-    merged = merged.map(c => {
-        const pendingPagos = newPagos.filter(op => op.data.cliente_id === c.id);
-        const extraMonto = pendingPagos.reduce((s, op) => s + Number(op.data.monto), 0);
-        const extraPagadoHoy = pendingPagos.some(op => op.data.fecha === today);
-        
-        return {
-            ...c,
-            totalAcumulado: c.totalAcumulado + extraMonto,
-            pagadoHoy: c.pagadoHoy || extraPagadoHoy
+    // Bug 4 fix: helper para calcular pagadoHoy y statusHoy
+    function computeStatus(tipoAhorro, tiposPagadosHoy) {
+        const pagosSet = new Set(tiposPagadosHoy);
+        if (tipoAhorro === 'ambos') {
+            const hasNormal = pagosSet.has('normal');
+            const hasPuesto = pagosSet.has('puesto');
+            if (hasNormal && hasPuesto) return { pagadoHoy: true, statusHoy: 'VERDE' };
+            if (hasNormal || hasPuesto) return { pagadoHoy: false, statusHoy: 'AMARILLO' };
+            return { pagadoHoy: false, statusHoy: 'ROJO' };
+        }
+        const expected = tipoAhorro === 'puesto' ? 'puesto' : 'normal';
+        if (pagosSet.has(expected)) return { pagadoHoy: true, statusHoy: 'VERDE' };
+        return { pagadoHoy: false, statusHoy: 'ROJO' };
+    }
+
+    // Combinar clientes
+    const pendingClientIds = new Set(newClients.map(nc => nc.id_local));
+    let merged = clients.filter(c => !deletions.has(c.id) && !recentlyDeletedIds.has(c.id) && !pendingClientIds.has(c.id)).map(c => {
+        const up = updates.find(op => op.id_ref === c.id);
+        const base = up ? { ...c, ...up.data } : c;
+        const stats = totals[c.id] || { total: 0, payToday: new Set() };
+        const mapped = mapCliente(base);
+        const tiposPagadosHoy = Array.from(stats.payToday);
+        const { pagadoHoy, statusHoy } = computeStatus(mapped.tipoAhorro || 'normal', tiposPagadosHoy);
+        return { 
+            ...mapped, 
+            totalAcumulado: stats.total, 
+            totalNormal: stats.normal,
+            totalPuesto: stats.puesto,
+            tiposPagadosHoy, 
+            pagadoHoy, 
+            statusHoy 
         };
     });
 
-    return merged;
+    newClients.forEach(nc => {
+        const stats = totals[nc.id_local] || { total: 0, normal: 0, puesto: 0, payToday: new Set() };
+        const mapped = mapCliente(nc.data);
+        const tiposPagadosHoy = Array.from(stats.payToday);
+        const { pagadoHoy, statusHoy } = computeStatus(mapped.tipoAhorro || 'normal', tiposPagadosHoy);
+        merged.push({ 
+            ...mapped, 
+            id: nc.id_local, 
+            status: 'pending', 
+            totalAcumulado: stats.total, 
+            totalNormal: stats.normal,
+            totalPuesto: stats.puesto,
+            tiposPagadosHoy, 
+            pagadoHoy, 
+            statusHoy 
+        });
+    });
+
+    return merged.sort((a, b) => a.nombre.localeCompare(b.nombre));
 }
 
 export async function addCliente(data) {
-    const nuevo = {
-        nombre: data.nombre.trim(),
-        puesto: data.puesto ? data.puesto.trim().toUpperCase() : '',
-        pasaje: data.pasaje ? data.pasaje.trim() : '',
-        lugar: data.lugar ? data.lugar.trim() : '',
-        tipo_ahorro: data.tipoAhorro || 'normal',
-        telefono: data.telefono ? data.telefono.trim() : '',
-        fecha_registro: data.fechaRegistro || new Date().toISOString().split('T')[0],
-        monto_normal: data.montoNormal || null,
-        monto_puesto: data.montoPuesto || null,
+    const uuid = generateId();
+    const lid = `local-${uuid}`;
+    const nuevo = { 
+        id: uuid,
+        nombre: data.nombre.trim(), 
+        puesto: data.puesto?.trim().toUpperCase() || '', 
+        pasaje: data.pasaje?.trim() || '', 
+        lugar: data.lugar?.trim() || '', 
+        tipo_ahorro: data.tipoAhorro || 'normal', 
+        telefono: data.telefono?.trim() || '', 
+        fecha_registro: data.fechaRegistro || getLocalIsoDate(), 
+        monto_normal: data.montoNormal || null, 
+        monto_puesto: data.montoPuesto || null 
     };
-
-    if (!navigator.onLine) {
-        addToQueue({ type: 'INSERT_CLIENTE', data: nuevo });
-        return { ...nuevo, id: `local-${Date.now()}`, status: 'pending' };
-    }
-
-    try {
-        const { data: insertedData, error } = await supabase
-            .from('ahorros_clientes')
-            .insert([nuevo])
-            .select()
-            .single();
-        if (error) throw error;
-        if (nuevo.lugar) await addLugar(nuevo.lugar);
-        return insertedData;
-    } catch (err) {
-        addToQueue({ type: 'INSERT_CLIENTE', data: nuevo });
-        return { ...nuevo, id: `local-${Date.now()}`, status: 'pending' };
-    }
+    await db.clients_cache.put({ ...nuevo, id: lid, status: 'pending' });
+    await addToQueue({ type: 'INSERT_CLIENTE', data: nuevo, id_local: lid });
+    return { ...nuevo, id: lid, status: 'pending' };
 }
 
 export async function updateCliente(id, data) {
-    const updates = { ...data };
-    if (updates.tipoAhorro) { updates.tipo_ahorro = updates.tipoAhorro; delete updates.tipoAhorro; }
-    if (updates.fechaRegistro) { updates.fecha_registro = updates.fechaRegistro; delete updates.fechaRegistro; }
-    if (updates.montoNormal !== undefined) { updates.monto_normal = updates.montoNormal; delete updates.montoNormal; }
-    if (updates.montoPuesto !== undefined) { updates.monto_puesto = updates.montoPuesto; delete updates.montoPuesto; }
-
-    if (!navigator.onLine) {
-        addToQueue({ type: 'UPDATE_CLIENTE', id, data: updates });
-        return { id, ...updates, status: 'pending' };
-    }
-
-    const { data: updatedData, error } = await supabase
-        .from('ahorros_clientes')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single();
-
-    if (error) throw error;
-    return updatedData;
+    const updates = { nombre: data.nombre?.trim(), puesto: data.puesto?.trim().toUpperCase(), pasaje: data.pasaje?.trim(), lugar: data.lugar?.trim(), tipo_ahorro: data.tipoAhorro, telefono: data.telefono?.trim(), fecha_registro: data.fechaRegistro, monto_normal: data.montoNormal, monto_puesto: data.montoPuesto };
+    Object.keys(updates).forEach(k => updates[k] === undefined && delete updates[k]);
+    await db.clients_cache.update(id, updates);
+    await addToQueue({ type: 'UPDATE_CLIENTE', id_ref: id, data: updates });
+    return { id, ...updates, status: 'pending' };
 }
 
 export async function addPago(data) {
-    const nuevo = {
-        cliente_id: data.clienteId,
-        tipo: data.tipo || 'normal',
-        monto: Number(data.monto),
-        fecha: data.fechaPersonalizada || new Date().toISOString().split('T')[0],
-        hora: new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' }),
-        nota: data.nota || '',
+    const today = getLocalIsoDate();
+    const now = new Date();
+    const hora = now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+    
+    // ESCUDO: Evitar duplicados exactos en el mismo minuto (Prevención de doble clic)
+    const recientes = await getPagosByCliente(data.clienteId);
+    const tipoActual = data.tipo || 'normal';
+    const duplicado = recientes.find(p => 
+        p.monto === Number(data.monto) && 
+        p.fecha === (data.fechaPersonalizada || today) && 
+        p.hora === hora &&
+        p.tipo === tipoActual
+    );
+    if (duplicado) {
+        console.warn('[Sync] Bloqueado posible pago duplicado por doble clic.');
+        return duplicado.id;
+    }
+
+    const uuid = generateId();
+    const lid = `local-${uuid}`;
+    const nuevo = { 
+        id: uuid,
+        cliente_id: data.clienteId, 
+        tipo: data.tipo || 'normal', 
+        monto: Number(data.monto), 
+        fecha: data.fechaPersonalizada || today, 
+        fecha_pago_real: today,
+        hora: hora, 
+        nota: data.nota || '' 
     };
-
-    if (!navigator.onLine) {
-        addToQueue({ type: 'INSERT_PAGO', data: nuevo });
-        return { ...nuevo, status: 'pending' };
-    }
-
-    try {
-        const { data: insertedData, error } = await supabase
-            .from('ahorros_pagos')
-            .insert([nuevo])
-            .select()
-            .single();
-        if (error) throw error;
-        return insertedData;
-    } catch (err) {
-        addToQueue({ type: 'INSERT_PAGO', data: nuevo });
-        return { ...nuevo, status: 'pending' };
-    }
+    await db.payments_cache.put({ ...nuevo, id: lid, status: 'pending' });
+    await addToQueue({ type: 'INSERT_PAGO', data: nuevo, id_local: lid });
+    return { ...nuevo, id: lid, status: 'pending' };
 }
 
 export async function deleteCliente(id) {
-    if (!navigator.onLine) {
-        addToQueue({ type: 'DELETE_CLIENTE', id });
-        return;
-    }
-    const { error } = await supabase.from('ahorros_clientes').delete().eq('id', id);
-    if (error) throw error;
+    if (!id) return;
+    recentlyDeletedIds.add(id);
+    const meta = await resolveClientMeta(id);
+    await db.clients_cache.delete(id);
+    await db.payments_cache.where('cliente_id').equals(id).delete();
+    await db.drive_queue.where('client_id').equals(id).delete();
+    await addToQueue({ type: 'DELETE_CLIENTE', id_ref: id, data: meta });
+    return true;
 }
 
-export async function deletePago(id) {
-    if (!navigator.onLine) {
-        addToQueue({ type: 'DELETE_PAGO', id });
-        return;
-    }
-    const { error } = await supabase.from('ahorros_pagos').delete().eq('id', id);
-    if (error) throw error;
-}
-
-export async function getPagos() {
-    let data = [];
-    if (navigator.onLine) {
-        const res = await supabase.from('ahorros_pagos').select('*').order('fecha', { ascending: false });
-        data = res.error ? [] : res.data;
-    }
-    
-    // Mezclar con nuevos pagos offline
-    const queue = getQueue();
-    const newPagos = queue.filter(op => op.type === 'INSERT_PAGO').map(op => ({ ...op.data, id: op.id_local, status: 'pending' }));
-    const deletedPagos = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id));
-    
-    return [...newPagos, ...data.filter(p => !deletedPagos.has(p.id))];
+export async function deletePago(id, data) {
+    await db.payments_cache.delete(id);
+    await addToQueue({ type: 'DELETE_PAGO', id_ref: id, data });
+    return true;
 }
 
 export async function getPagosByCliente(clienteId) {
-    let data = [];
-    if (navigator.onLine && !String(clienteId).startsWith('local-')) {
-        const res = await supabase.from('ahorros_pagos').select('*').eq('cliente_id', clienteId).order('fecha', { ascending: false });
-        data = res.error ? [] : res.data;
-    }
-
-    const queue = getQueue();
-    const newPagos = queue
-        .filter(op => op.type === 'INSERT_PAGO' && op.data.cliente_id === clienteId)
-        .map(op => ({ ...op.data, id: op.id_local, status: 'pending' }));
-    const deletedPagos = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id));
-
-    return [...newPagos, ...data.filter(p => !deletedPagos.has(p.id))];
+    const cached = await getCachedPaymentsByClient(clienteId);
+    const queue = await getAllQueueOps();
+    const deleted = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id_ref));
+    const pending = queue.filter(op => op.type === 'INSERT_PAGO' && op.data.cliente_id === clienteId).map(op => ({ ...op.data, id: op.id_local, status: 'pending' }));
+    
+    const pendingIds = new Set(pending.map(p => p.id));
+    const finalPagos = [...pending, ...cached.filter(p => !deleted.has(p.id) && !pendingIds.has(p.id))];
+    
+    return finalPagos.sort((a, b) => b.fecha.localeCompare(a.fecha) || (b.hora || '').localeCompare(a.hora || ''));
 }
 
 export async function getTotalesByCliente(clienteId) {
     const pagos = await getPagosByCliente(clienteId);
-    const normal = pagos.filter(p => p.tipo === 'normal').reduce((sum, p) => sum + Number(p.monto), 0);
-    const puesto = pagos.filter(p => p.tipo === 'puesto').reduce((sum, p) => sum + Number(p.monto), 0);
-    return { normal, puesto, total: normal + puesto };
+    const n = pagos.filter(p => p.tipo === 'normal').reduce((s, p) => s + Number(p.monto), 0);
+    const p = pagos.filter(p => p.tipo === 'puesto').reduce((s, p) => s + Number(p.monto), 0);
+    return { normal: n, puesto: p, total: n + p };
+}
+
+export async function getClientes() {
+    try {
+        const { data } = await supabase.from('ahorros_clientes').select('*').order('nombre');
+        return data?.map(mapCliente) || await getCachedClients();
+    } catch (e) { return await getCachedClients(); }
+}
+
+export async function getPagos() {
+    try {
+        const { data } = await supabase.from('ahorros_pagos').select('*').order('fecha', { ascending: false });
+        return data || await getCachedPayments();
+    } catch (e) { return await getCachedPayments(); }
 }
 
 export async function getLugares() {
-    const { data, error } = await supabase.from('ahorros_lugares').select('nombre').order('nombre');
-    return error ? [] : data.map(l => l.nombre);
+    if (!isUserOnline()) return await getCachedLugares();
+    try {
+        const { data } = await supabase.from('ahorros_lugares').select('nombre').order('nombre');
+        if (data) await cacheLugares(data.map(l => l.nombre));
+        return data?.map(l => l.nombre) || await getCachedLugares();
+    } catch (e) { return await getCachedLugares(); }
 }
 
 export async function addLugar(nombre) {
-    if (!nombre) return;
     const clean = nombre.trim();
     if (!clean) return;
-    await supabase.from('ahorros_lugares').upsert([{ nombre: clean }], { onConflict: 'nombre' });
+    await addToQueue({ type: 'INSERT_LUGAR', data: { nombre: clean } });
 }
 
 export async function deleteLugar(nombre) {
-    const { error } = await supabase.from('ahorros_lugares').delete().eq('nombre', nombre);
-    if (error) throw error;
+    await addToQueue({ type: 'DELETE_LUGAR', data: { nombre } });
+}
+
+// Bug 6 fix: obtener todos los pagos fusionados con cola offline
+export async function getAllPagosMerged() {
+    let payments = [];
+    try {
+        if (!isUserOnline()) throw new Error('Offline');
+        const { data: dbP } = await supabase.from('ahorros_pagos').select('*, fecha_pago_real').order('fecha', { ascending: false });
+        payments = dbP || [];
+        await cachePayments(payments);
+    } catch {
+        payments = await getCachedPayments();
+    }
+    const queue = await getAllQueueOps();
+    const deletedPagos = new Set(queue.filter(op => op.type === 'DELETE_PAGO').map(op => op.id_ref));
+    const newPagos = queue.filter(op => op.type === 'INSERT_PAGO').map(op => ({ ...op.data, id: op.id_local, status: 'pending' }));
+    // FIX DUPLICADOS: excluir de cache los pagos que ya están como pendientes en la cola
+    const pendingIds = new Set(newPagos.map(p => p.id));
+    return [
+        ...payments.filter(p => !deletedPagos.has(p.id) && !pendingIds.has(p.id)),
+        ...newPagos
+    ];
+}
+
+function getLocalIsoDate() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().split('T')[0];
 }
 
 export function buscarClientes(clientes, query) {

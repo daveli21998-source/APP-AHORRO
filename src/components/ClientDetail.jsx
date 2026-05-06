@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, MoreVertical, Trash2, Edit2, Phone, ChevronDown } from 'lucide-react';
+import { ArrowLeft, MoreVertical, Trash2, Edit2, Phone, ChevronDown, Scale, Store, DollarSign, MapPin, DoorOpen, RefreshCcw } from 'lucide-react';
 import {
     getPagosByCliente, addPago, deletePago,
-    getTotalesByCliente, deleteCliente
+    getTotalesByCliente, deleteCliente, forceSyncClientToGoogleDrive
 } from '../db';
 import ClientCalendar from './ClientCalendar';
 import SelectionCalendar from './SelectionCalendar';
@@ -91,6 +91,7 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
     }
 
     async function handleSave() {
+        if (saving) return; // Seguro contra doble clic
         const montoNum = parseFloat(monto);
         if (!monto || isNaN(montoNum) || montoNum <= 0) return;
 
@@ -122,20 +123,30 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
             setMonto('');
             setSelectedQuick(null);
             setSaving(false);
-
             showToast(`${savedCount} pago${savedCount > 1 ? 's' : ''} de ${formatMoney(montoNum)} guardado ✓`, '💚');
             setSelectedDates(new Set());
         }, 80);
     }
 
     async function handleDelPago(id) {
-        await deletePago(id);
-        reload();
-        showToast('Pago eliminado', '🗑️');
+        // Actualización optimista: quitar de la lista de inmediato
+        const originalPagos = [...pagos];
+        setPagos(prev => prev.filter(p => p.id !== id));
+        
+        const pagoToDel = originalPagos.find(p => p.id === id);
+        const success = await deletePago(id, pagoToDel);
+        
+        if (success) {
+            showToast('Pago eliminado', '🗑️');
+            reload(); // Refrescar totales y lista final
+        } else {
+            // Si falló, revertir la lista
+            setPagos(originalPagos);
+            showToast('Error al borrar', '❌');
+        }
     }
 
     async function handleDeleteCliente() {
-        // En vez de window.confirm() bloqueado, se maneja el estado en el menú.
         await deleteCliente(cliente.id);
         onDelete(cliente.id);
     }
@@ -152,15 +163,31 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
                 <div style={{ flex: 1 }}>
                     <div className="topbar-title">{cliente.nombre}</div>
                     <div className="topbar-subtitle" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                        {cliente.puesto && <span>📍 {cliente.puesto}</span>}
-                        {cliente.pasaje && <span>🚪 Pasaje {cliente.pasaje}</span>}
+                        {cliente.puesto && (
+                            <span style={{
+                                background: '#0f172a', border: '1px solid #1e293b',
+                                color: '#fbbf24', borderRadius: 8, padding: '2px 8px',
+                                fontSize: '10px', fontWeight: 900, display: 'flex', alignItems: 'center', gap: 4
+                            }}>
+                                <MapPin size={10} color="#ef4444" strokeWidth={3} /> PSTO {cliente.puesto}
+                            </span>
+                        )}
+                        {cliente.pasaje && (
+                            <span style={{
+                                background: '#0f172a', border: '1px solid #1e293b',
+                                color: '#fbbf24', borderRadius: 8, padding: '2px 8px',
+                                fontSize: '10px', fontWeight: 900, display: 'flex', alignItems: 'center', gap: 4
+                            }}>
+                                <DoorOpen size={10} color="#f59e0b" strokeWidth={3} /> PASAJE {cliente.pasaje}
+                            </span>
+                        )}
                         {cliente.tipoAhorro && (
                             <span style={{ 
-                                color: cliente.tipoAhorro === 'ambos' ? 'var(--info)' : (cliente.tipoAhorro === 'puesto' ? 'var(--color-puesto)' : 'var(--primary)'),
+                                color: cliente.tipoAhorro === 'ambos' ? 'var(--color-completo)' : (cliente.tipoAhorro === 'puesto' ? 'var(--color-puesto)' : 'var(--primary)'),
                                 fontWeight: 800,
                                 fontSize: '10.5px'
                             }}>
-                                {cliente.tipoAhorro === 'ambos' ? '⚖️ COMPLETO' : (cliente.tipoAhorro === 'puesto' ? '🏪 PUESTO' : '💰 NORMAL')}
+                                {cliente.tipoAhorro === 'ambos' ? <><Scale size={11} style={{ marginRight: 4 }} /> COMPLETO</> : (cliente.tipoAhorro === 'puesto' ? <><Store size={11} style={{ marginRight: 4 }} /> PUESTO</> : <><DollarSign size={11} style={{ marginRight: 4 }} /> NORMAL</>)}
                             </span>
                         )}
                         {cliente.lugar && <span style={{ color: 'var(--text-3)', fontSize: '10.5px' }}>• {cliente.lugar}</span>}
@@ -192,6 +219,15 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
                                 )}
                                 <div className="options-item" onClick={() => { setShowMenu(false); onEdit(cliente); }}>
                                     <Edit2 size={15} /> Editar
+                                </div>
+                                <div className="options-item" style={{ color: '#10b981' }} onClick={async () => { 
+                                    setShowMenu(false); 
+                                    showToast('Sincronizando con Drive...', '🔄');
+                                    const ok = await forceSyncClientToGoogleDrive(cliente.id);
+                                    if(ok) showToast('Sincronizado con Drive ✓', '☁️');
+                                    else showToast('Error al sincronizar', '❌');
+                                }}>
+                                    <RefreshCcw size={15} /> Sincronizar
                                 </div>
                                 <div
                                     className="options-item danger"
@@ -361,7 +397,12 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
                         placeholder="Otro monto..."
                         value={monto}
                         onChange={handleCustomChange}
-                        onKeyDown={e => e.key === 'Enter' && montoValido && handleSave()}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && montoValido && !saving) {
+                                e.preventDefault();
+                                handleSave();
+                            }
+                        }}
                     />
                 </div>
 

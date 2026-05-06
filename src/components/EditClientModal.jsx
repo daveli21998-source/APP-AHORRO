@@ -54,10 +54,16 @@ export default function EditClientModal({ cliente, onClose, onSaved }) {
         return errs;
     }
 
+    const [saving, setSaving] = useState(false);
+
     async function handleSubmit(e) {
         e.preventDefault();
+        if (saving) return;
+
         const errs = validate();
         if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+        
+        setSaving(true);
         const updated = {
             nombre: form.nombre.trim(), puesto: form.puesto.trim().toUpperCase(),
             pasaje: form.pasaje.trim(), lugar: form.lugar.trim(),
@@ -65,9 +71,15 @@ export default function EditClientModal({ cliente, onClose, onSaved }) {
             montoNormal: form.montoNormal ? parseFloat(form.montoNormal) : null,
             montoPuesto: form.montoPuesto ? parseFloat(form.montoPuesto) : null,
         };
-        await updateCliente(cliente.id, updated);
-        onSaved({ ...cliente, ...updated });
-        onClose();
+        
+        try {
+            await updateCliente(cliente.id, updated);
+            onSaved({ ...cliente, ...updated });
+            onClose();
+        } catch (err) {
+            console.error(err);
+            setSaving(false);
+        }
     }
 
     const inp = (campo) => errors[campo] ? { borderColor: 'var(--danger)' } : {};
@@ -171,7 +183,9 @@ export default function EditClientModal({ cliente, onClose, onSaved }) {
 
                     <div className="btn-row" style={{ position: 'sticky', bottom: 0, background: 'var(--surface)', padding: '10px 0', borderTop: '1px solid var(--border-2)', zIndex: 10 }}>
                         <button type="button" className="btn-secondary" onClick={onClose}>Cancelar</button>
-                        <button type="submit" className="btn-primary" id="btn-confirm-edit">✅ Actualizar</button>
+                        <button type="submit" className="btn-primary" id="btn-confirm-edit" disabled={saving}>
+                            {saving ? '⏳ Actualizando...' : '✅ Actualizar'}
+                        </button>
                     </div>
                 </form>
             </div>
