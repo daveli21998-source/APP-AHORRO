@@ -41,3 +41,6 @@ scratch/
 test_*.js
 verify_*.js
 verify_*.mjs
+
+# Respaldo local
+backups/

@@ -20,8 +20,9 @@ export default function RecaudadoModal({ onClose }) {
     }, []);
 
     const pagosDia = allPagos.filter(p => {
-        // Usamos la fecha real de cobro, o caemos en created_at/fecha para registros antiguos
-        const dReal = p.fecha_pago_real || (p.created_at ? p.created_at.split('T')[0] : p.fecha);
+        // REGLA DE ORO: Recaudado siempre usa la fecha real de cobro (fecha_pago_real)
+        // Para registros antiguos sin este campo, usamos fecha (asumiendo que antes se usaba igual)
+        const dReal = p.fecha_pago_real || p.fecha;
         return dReal === selectedDate;
     });
     

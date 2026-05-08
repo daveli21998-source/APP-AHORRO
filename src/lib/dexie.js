@@ -127,20 +127,25 @@ export async function markError(id, errorMessage) {
   });
 }
 
-/** Re-encola operaciones con error para reintento (máximo 5 reintentos) */
+/** Re-encola operaciones con error para reintento */
 export async function requeueErrors(maxRetries = 5) {
   const errored = await db.sync_queue
     .where('status')
     .equals(SYNC_STATUS.ERROR)
     .toArray();
 
+  let count = 0;
   for (const op of errored) {
     if ((op.retry_count || 0) < maxRetries) {
-      console.log(`[SyncQueue] Re-encolando op ${op.id} (Intento ${(op.retry_count || 0) + 1}/${maxRetries})`);
       await db.sync_queue.update(op.id, { status: SYNC_STATUS.PENDING });
-    } else {
-      console.warn(`[SyncQueue] Op ${op.id} alcanzó el límite de reintentos (${maxRetries}). Se mantendrá en estado ERROR.`);
+      count++;
     }
+  }
+  
+  if (count > 0) {
+    console.log(`[SyncQueue] Re-encoladas ${count} operaciones para reintento.`);
+    const total = await getPendingCount();
+    window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: total } }));
   }
 }
 
@@ -166,12 +171,16 @@ export async function requeueStale(maxAgeMs = 60000) {
   }
 }
 
-/** Cuenta de operaciones pendientes */
+/** Cuenta de operaciones pendientes o con error */
 export async function getPendingCount() {
-  return db.sync_queue
-    .where('status')
-    .anyOf([SYNC_STATUS.PENDING, SYNC_STATUS.ERROR])
-    .count();
+  try {
+    return await db.sync_queue
+      .where('status')
+      .anyOf([SYNC_STATUS.PENDING, SYNC_STATUS.ERROR, SYNC_STATUS.SYNCING])
+      .count();
+  } catch (e) {
+    return 0;
+  }
 }
 
 /** Obtiene todas las operaciones de la cola (para mezcla con datos online) */

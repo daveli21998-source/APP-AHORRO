@@ -216,11 +216,65 @@ export async function clearSyncQueue() {
     }
 }
 
+/**
+ * RUTINA DE AUTOCURACIÓN (Expert Repair)
+ * Busca ítems trabados y verifica si ya existen en la nube para limpiarlos.
+ */
+export async function repairSyncQueue() {
+    if (!isUserOnline()) return;
+    
+    try {
+        const queue = await getAllQueueOps();
+        const problematic = queue.filter(op => 
+            op.status === SYNC_STATUS.ERROR || 
+            (op.status === SYNC_STATUS.SYNCING && Date.now() - new Date(op.created_at).getTime() > 60000)
+        );
+
+        if (problematic.length === 0) return;
+
+        console.log(`[AutoRepair] Iniciando revisión de ${problematic.length} ítems trabados...`);
+
+        for (const op of problematic) {
+            const cleanId = String(op.id_local || op.id_ref).replace('local-', '');
+            let exists = false;
+
+            try {
+                if (op.type === 'INSERT_CLIENTE' || op.type === 'UPDATE_CLIENTE') {
+                    const { data } = await supabase.from('ahorros_clientes').select('id').eq('id', cleanId).single();
+                    if (data) exists = true;
+                } else if (op.type === 'INSERT_PAGO') {
+                    const { data } = await supabase.from('ahorros_pagos').select('id').eq('id', cleanId).single();
+                    if (data) exists = true;
+                }
+
+                if (exists) {
+                    console.log(`[AutoRepair] Ítem ${op.id} (${op.type}) ya existe en la nube. Limpiando...`);
+                    await markSuccess(op.id);
+                } else if (op.status === SYNC_STATUS.ERROR) {
+                    // Si no existe y es un error, lo devolvemos a PENDING para que el motor normal lo intente
+                    console.log(`[AutoRepair] Re-intentando ítem ${op.id} (${op.type})...`);
+                    await db.sync_queue.update(op.id, { status: SYNC_STATUS.PENDING });
+                }
+            } catch (e) {
+                // Error de red o query, ignoramos este ítem por ahora
+            }
+        }
+        
+        const finalCount = await getTotalPendingCount();
+        window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: finalCount } }));
+    } catch (err) {
+        console.error('[AutoRepair] Error crítico en rutina:', err);
+    }
+}
+
 export async function syncOfflineData() {
     if (!isUserOnline()) return { synced: 0, failed: 0 };
     
     // Recuperar operaciones zombie (atascadas en 'syncing' por más de 60s)
     await requeueStale(60000);
+
+    // RUTINA DE AUTOCURACIÓN
+    await repairSyncQueue();
 
     // Auto-desbloqueo de emergencia (más agresivo: 30s)
     if (isSyncing && Date.now() - (window._lastSyncStart || 0) > 30000) {
@@ -246,10 +300,17 @@ export async function syncOfflineData() {
         }));
 
         let loopLimit = 100; // Evitar bucles infinitos
+        let consecutiveErrors = 0;
+
         while (loopLimit > 0) {
             loopLimit--;
             const op = await dequeueNext();
             if (!op) break;
+
+            if (consecutiveErrors >= 5) {
+                console.warn('[Sync] Demasiados errores consecutivos, abortando ciclo actual.');
+                break;
+            }
 
             await markSyncing(op.id);
             try {
@@ -307,10 +368,12 @@ export async function syncOfflineData() {
                 
                 await markSuccess(op.id);
                 synced++;
+                consecutiveErrors = 0; // Resetear contador al tener éxito
             } catch (err) {
                 console.error(`[Sync] Falló op ${op.id}, saltando...`, err);
                 await markError(op.id, err.message || String(err));
                 failed++;
+                consecutiveErrors++;
                 continue; 
             }
         }
@@ -404,7 +467,7 @@ export async function getClientesConMetaData() {
         const m = Number(p.monto);
         acc[p.cliente_id].total += m;
         if (p.tipo === 'puesto') acc[p.cliente_id].puesto += m; else acc[p.cliente_id].normal += m;
-        if (p.fecha === today) acc[p.cliente_id].payToday.add(p.tipo || 'normal');
+        if (p.fecha_pago_real === today) acc[p.cliente_id].payToday.add(p.tipo || 'normal');
         return acc;
     }, {});
 

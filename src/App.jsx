@@ -8,7 +8,7 @@ import ReportsScreen from './components/ReportsScreen';
 import SplashScreen from './components/SplashScreen';
 import LoginScreen from './components/LoginScreen';
 import UsersScreen from './components/UsersScreen';
-import { getClientesConMetaData, getPagosByCliente, syncOfflineData, forceSyncClientToGoogleDrive, getTotalPendingCount, migrateFromLocalStorage, clearSyncQueue, isUserOnline, checkRealConnectivity, requeueErrors } from './db';
+import { getClientesConMetaData, getPagosByCliente, syncOfflineData, forceSyncClientToGoogleDrive, getTotalPendingCount, migrateFromLocalStorage, clearSyncQueue, isUserOnline, checkRealConnectivity, requeueErrors, repairSyncQueue } from './db';
 import { generateExcelPasaje } from './lib/excelGenerator';
 import { useToast } from './hooks/useToast';
 import { useAuth } from './context/AuthContext';
@@ -175,7 +175,10 @@ export default function App() {
     const initCheck = async () => {
       const reallyOnline = await checkRealConnectivity(true);
       setIsOnline(reallyOnline);
-      if (reallyOnline) triggerSync();
+      if (reallyOnline) {
+        await repairSyncQueue();
+        triggerSync();
+      }
     };
     initCheck();
     updatePendingCount();
