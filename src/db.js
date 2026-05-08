@@ -544,6 +544,15 @@ export async function addCliente(data) {
     };
     await db.clients_cache.put({ ...nuevo, id: lid, status: 'pending' });
     await addToQueue({ type: 'INSERT_CLIENTE', data: nuevo, id_local: lid });
+
+    // Persistencia automática de lugar si es nuevo
+    if (nuevo.lugar) {
+        const existentes = await getCachedLugares();
+        if (!existentes.includes(nuevo.lugar)) {
+            await addLugar(nuevo.lugar);
+        }
+    }
+
     return { ...nuevo, id: lid, status: 'pending' };
 }
 
@@ -552,6 +561,15 @@ export async function updateCliente(id, data) {
     Object.keys(updates).forEach(k => updates[k] === undefined && delete updates[k]);
     await db.clients_cache.update(id, updates);
     await addToQueue({ type: 'UPDATE_CLIENTE', id_ref: id, data: updates });
+
+    // Persistencia automática de lugar si es nuevo
+    if (updates.lugar) {
+        const existentes = await getCachedLugares();
+        if (!existentes.includes(updates.lugar)) {
+            await addLugar(updates.lugar);
+        }
+    }
+
     return { id, ...updates, status: 'pending' };
 }
 
@@ -642,22 +660,56 @@ export async function getPagos() {
 }
 
 export async function getLugares() {
-    if (!isUserOnline()) return await getCachedLugares();
+    let base = [];
     try {
-        const { data } = await supabase.from('ahorros_lugares').select('nombre').order('nombre');
-        if (data) await cacheLugares(data.map(l => l.nombre));
-        return data?.map(l => l.nombre) || await getCachedLugares();
-    } catch (e) { return await getCachedLugares(); }
+        if (isUserOnline()) {
+            const { data } = await supabase.from('ahorros_lugares').select('nombre').order('nombre');
+            if (data) {
+                base = data.map(l => l.nombre);
+                await cacheLugares(base);
+            } else {
+                base = await getCachedLugares();
+            }
+        } else {
+            base = await getCachedLugares();
+        }
+    } catch (e) {
+        base = await getCachedLugares();
+    }
+
+    // Fusionar con la cola de sincronización para que la UI sea instantánea
+    const queue = await getAllQueueOps();
+    const deleted = new Set(queue.filter(op => op.type === 'DELETE_LUGAR').map(op => op.data.nombre));
+    const added = queue.filter(op => op.type === 'INSERT_LUGAR').map(op => op.data.nombre);
+
+    const merged = [
+        ...base.filter(n => !deleted.has(n)),
+        ...added.filter(n => !base.includes(n))
+    ];
+
+    // Eliminar duplicados y ordenar
+    return Array.from(new Set(merged)).sort((a, b) => a.localeCompare(b));
 }
 
 export async function addLugar(nombre) {
     const clean = nombre.trim();
     if (!clean) return;
+    // Persistencia local inmediata para UX
+    await db.lugares_cache.put({ nombre: clean });
     await addToQueue({ type: 'INSERT_LUGAR', data: { nombre: clean } });
 }
 
 export async function deleteLugar(nombre) {
+    // 1. Verificar si está en uso por clientes en caché local
+    const inUse = await db.clients_cache.where('lugar').equals(nombre).count();
+    if (inUse > 0) return false;
+
+    // 2. Eliminar de caché local inmediatamente
+    await db.lugares_cache.delete(nombre);
+
+    // 3. Sincronizar eliminación
     await addToQueue({ type: 'DELETE_LUGAR', data: { nombre } });
+    return true;
 }
 
 // Bug 6 fix: obtener todos los pagos fusionados con cola offline

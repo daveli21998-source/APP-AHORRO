@@ -26,7 +26,7 @@ export default function EditClientModal({ cliente, onClose, onSaved }) {
             setLugares(await getLugares());
             if (form.lugar === lugarItem) setForm(f => ({ ...f, lugar: '' }));
         } else {
-            setDeleteError(`"${lugarItem}" en uso por clientes.`);
+            setDeleteError("No se puede eliminar este lugar porque tiene clientes asociados.");
             setTimeout(() => setDeleteError(''), 3500);
         }
     }
