@@ -5,7 +5,9 @@ import {
   FileDown, 
   Users, 
   MapPin,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { supabase } from '../db';
 import { generateExcelPasaje, prepareExcelBuffer } from '../lib/excelGenerator';
@@ -14,6 +16,7 @@ export default function ReportsScreen({ clientes, showToast }) {
   const [lugaresExpandidos, setLugaresExpandidos] = useState({});
   const [activeTab, setActiveTab] = useState('normal'); // 'normal' | 'puesto'
   const [isExporting, setIsExporting] = useState(false);
+  const [showTotal, setShowTotal] = useState(false);
   const [cachedPagos, setCachedPagos] = useState({});
   const [cachedBuffers, setCachedBuffers] = useState({});
 
@@ -185,17 +188,21 @@ export default function ReportsScreen({ clientes, showToast }) {
           </div>
 
           {/* Resumen Total */}
-          <div style={{ 
-            background: 'var(--surface-2)', 
-            border: activeTab === 'normal' ? '1px solid var(--info)' : '1px solid var(--color-puesto)',
-            borderRadius: '16px', 
-            padding: '24px', 
-            textAlign: 'center',
-            marginBottom: 24,
-            boxShadow: '0 4px 15px rgba(0,0,0,0.2)'
-          }}>
-             <div style={{ fontSize: 32, fontWeight: 900, color: activeTab === 'normal' ? 'var(--info)' : 'var(--color-puesto)', marginBottom: 4 }}>
-                {formatMoney(totalTab)}
+          <div 
+            onClick={() => setShowTotal(!showTotal)}
+            style={{ 
+              background: 'var(--surface-2)', 
+              border: activeTab === 'normal' ? '1px solid var(--info)' : '1px solid var(--color-puesto)',
+              borderRadius: '16px', 
+              padding: '24px', 
+              textAlign: 'center',
+              marginBottom: 24,
+              boxShadow: '0 4px 15px rgba(0,0,0,0.2)',
+              cursor: 'pointer'
+            }}>
+             <div style={{ fontSize: 32, fontWeight: 900, color: activeTab === 'normal' ? 'var(--info)' : 'var(--color-puesto)', marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                {showTotal ? formatMoney(totalTab) : 'S/ ****'}
+                {showTotal ? <EyeOff size={24} style={{ opacity: 0.5 }} /> : <Eye size={24} style={{ opacity: 0.5 }} />}
              </div>
              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-3)', letterSpacing: 1.5 }}>
                 TOTAL {activeTab.toUpperCase()}

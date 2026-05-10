@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Users, TrendingUp, ChevronDown, CheckCircle2, Clock, FileDown, DollarSign, Home, BarChart3, Settings, Scale, Store, MapPin, DoorOpen, RefreshCcw } from 'lucide-react';
+import { Plus, Users, TrendingUp, ChevronDown, CheckCircle2, Clock, FileDown, DollarSign, Home, BarChart3, Settings, Scale, Store, MapPin, DoorOpen, RefreshCcw, Eye, EyeOff } from 'lucide-react';
 import SearchBar from './SearchBar';
 import { buscarClientes } from '../db';
 import RecaudadoModal from './RecaudadoModal';
@@ -12,9 +12,10 @@ function formatMoney(n) {
     return 'S/ ' + n.toFixed(2).replace(/\.00$/, '');
 }
 
-export default function HomeScreen({ clientes, onSelectClient, onAddClient, onExport, onSyncClient, onGlobalSync, isGlobalSyncing, pendingCount = 0 }) {
+export default function HomeScreen({ clientes, searchQuery, setSearchQuery, onSelectClient, onAddClient, onExport, onSyncClient, onGlobalSync, isGlobalSyncing, pendingCount = 0 }) {
 
-    const [query, setQuery] = useState('');
+    const query = searchQuery !== undefined ? searchQuery : '';
+    const setQuery = setSearchQuery || (() => {});
     const [filtrados, setFiltrados] = useState(clientes);
     const [activeTab, setActiveTab] = useState('lista'); // 'lista' | 'lugares'
     const [pasajeActivo, setPasajeActivo] = useState({}); // { lugar: pasaje }
@@ -23,6 +24,8 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
     const [currentPage, setCurrentPage] = useState(1);
     const [showRecaudado, setShowRecaudado] = useState(false);
     const [spinningIds, setSpinningIds] = useState({});
+    const [showTotalClientes, setShowTotalClientes] = useState(false);
+    const [showTotalGeneral, setShowTotalGeneral] = useState(false);
     const ITEMS_PER_PAGE = 10;
 
     const handleQuickSync = (e, cliente) => {
@@ -78,12 +81,18 @@ export default function HomeScreen({ clientes, onSelectClient, onAddClient, onEx
 
             {/* Stats */}
             <div className="stats-bar">
-                <div className="stat-chip">
-                    <div className="stat-chip-value">{totalClientes}</div>
+                <div className="stat-chip" onClick={() => setShowTotalClientes(!showTotalClientes)} style={{ cursor: 'pointer' }}>
+                    <div className="stat-chip-value" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        {showTotalClientes ? totalClientes : '**'}
+                        {showTotalClientes ? <EyeOff size={14} style={{ opacity: 0.5 }} /> : <Eye size={14} style={{ opacity: 0.5 }} />}
+                    </div>
                     <div className="stat-chip-label">Clientes</div>
                 </div>
-                <div className="stat-chip" style={{ flex: 2, background: 'var(--primary-soft)', borderColor: 'var(--primary)' }}>
-                    <div className="stat-chip-value" style={{ fontSize: 20 }}>{formatMoney(totalGeneral)}</div>
+                <div className="stat-chip" onClick={() => setShowTotalGeneral(!showTotalGeneral)} style={{ flex: 2, background: 'var(--primary-soft)', borderColor: 'var(--primary)', cursor: 'pointer' }}>
+                    <div className="stat-chip-value" style={{ fontSize: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                        {showTotalGeneral ? formatMoney(totalGeneral) : 'S/ ****'}
+                        {showTotalGeneral ? <EyeOff size={16} style={{ opacity: 0.5 }} /> : <Eye size={16} style={{ opacity: 0.5 }} />}
+                    </div>
                     <div className="stat-chip-label">Total acumulado</div>
                 </div>
             </div>

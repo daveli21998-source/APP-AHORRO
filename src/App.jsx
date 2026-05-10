@@ -47,6 +47,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(isUserOnline());
   const [activeView, setActiveView] = useState('home'); // 'home' | 'reports' | 'users'
+  const [searchQuery, setSearchQuery] = useState('');
   const [syncRemaining, setSyncRemaining] = useState(0);
   const [syncDoneMsg, setSyncDoneMsg] = useState(false);
   const { toast, showToast } = useToast();
@@ -336,6 +337,8 @@ export default function App() {
         ) : (
           <HomeScreen 
             clientes={clientes} 
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
             onAddClient={() => setShowAdd(true)} 
             onSelectClient={setClienteActivo}
             onExport={handleExportPasaje}

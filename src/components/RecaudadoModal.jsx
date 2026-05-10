@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Calendar, ChevronLeft, ChevronRight, DollarSign, Scale, Store, CheckCircle2 } from 'lucide-react';
+import { X, Calendar, ChevronLeft, ChevronRight, DollarSign, Scale, Store, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { getAllPagosMerged, getClientesConMetaData } from '../db';
 
 export default function RecaudadoModal({ onClose }) {
@@ -7,6 +7,9 @@ export default function RecaudadoModal({ onClose }) {
     const [allPagos, setAllPagos] = useState([]);
     const [allClientes, setAllClientes] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [showTotalNormal, setShowTotalNormal] = useState(false);
+    const [showTotalPuesto, setShowTotalPuesto] = useState(false);
+    const [showTotalDia, setShowTotalDia] = useState(false);
 
     useEffect(() => {
         async function loadData() {
@@ -95,33 +98,51 @@ export default function RecaudadoModal({ onClose }) {
                     <div style={{ padding: '0 24px 24px' }}>
                         {/* Totales Row */}
                         <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                            <div style={{ flex: 1, background: '#0d1a12', borderRadius: 16, padding: '16px', border: '1px solid #14532d', textAlign: 'center' }}>
+                            <div 
+                                onClick={() => setShowTotalNormal(!showTotalNormal)}
+                                style={{ flex: 1, background: '#0d1a12', borderRadius: 16, padding: '16px', border: '1px solid #14532d', textAlign: 'center', cursor: 'pointer' }}
+                            >
                                 <div style={{ fontSize: 10, fontWeight: 900, color: '#3b82f6', marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                                     <DollarSign size={12} strokeWidth={3} /> NORMAL
                                 </div>
-                                <div style={{ fontSize: 24, fontWeight: 900, color: '#fff' }}>{formatMoney(totalNormal)}</div>
+                                <div style={{ fontSize: 24, fontWeight: 900, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                                    {showTotalNormal ? formatMoney(totalNormal) : 'S/ ****'}
+                                    {showTotalNormal ? <EyeOff size={16} style={{ opacity: 0.5 }} /> : <Eye size={16} style={{ opacity: 0.5 }} />}
+                                </div>
                             </div>
-                            <div style={{ flex: 1, background: '#0d1a12', borderRadius: 16, padding: '16px', border: '1px solid #14532d', textAlign: 'center' }}>
+                            <div 
+                                onClick={() => setShowTotalPuesto(!showTotalPuesto)}
+                                style={{ flex: 1, background: '#0d1a12', borderRadius: 16, padding: '16px', border: '1px solid #14532d', textAlign: 'center', cursor: 'pointer' }}
+                            >
                                 <div style={{ fontSize: 10, fontWeight: 900, color: '#f59e0b', marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                                     <Store size={12} strokeWidth={3} /> PUESTO
                                 </div>
-                                <div style={{ fontSize: 24, fontWeight: 900, color: '#fff' }}>{formatMoney(totalPuesto)}</div>
+                                <div style={{ fontSize: 24, fontWeight: 900, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                                    {showTotalPuesto ? formatMoney(totalPuesto) : 'S/ ****'}
+                                    {showTotalPuesto ? <EyeOff size={16} style={{ opacity: 0.5 }} /> : <Eye size={16} style={{ opacity: 0.5 }} />}
+                                </div>
                             </div>
                         </div>
 
                         {/* Total Dia */}
-                        <div style={{ 
-                            background: '#10b981', 
-                            borderRadius: 16, 
-                            padding: '16px 24px', 
-                            display: 'flex', 
-                            justifyContent: 'space-between', 
-                            alignItems: 'center',
-                            marginBottom: 24,
-                            boxShadow: '0 4px 20px rgba(16, 185, 129, 0.3)'
-                        }}>
+                        <div 
+                            onClick={() => setShowTotalDia(!showTotalDia)}
+                            style={{ 
+                                background: '#10b981', 
+                                borderRadius: 16, 
+                                padding: '16px 24px', 
+                                display: 'flex', 
+                                justifyContent: 'space-between', 
+                                alignItems: 'center',
+                                marginBottom: 24,
+                                boxShadow: '0 4px 20px rgba(16, 185, 129, 0.3)',
+                                cursor: 'pointer'
+                            }}>
                             <div style={{ color: '#064e3b', fontWeight: 900, fontSize: 14 }}>TOTAL DEL DÍA</div>
-                            <div style={{ color: '#fff', fontWeight: 900, fontSize: 28 }}>{formatMoney(totalDia)}</div>
+                            <div style={{ color: '#fff', fontWeight: 900, fontSize: 28, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {showTotalDia ? formatMoney(totalDia) : 'S/ ****'}
+                                {showTotalDia ? <EyeOff size={20} style={{ opacity: 0.7 }} /> : <Eye size={20} style={{ opacity: 0.7 }} />}
+                            </div>
                         </div>
 
                         {/* Detalle */}
