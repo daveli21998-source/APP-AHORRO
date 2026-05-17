@@ -442,30 +442,39 @@ export async function getClientesConMetaData() {
     const today = getLocalIsoDate();
     
     try {
-        // EXPERTO: Siempre preferimos la base local para rapidez, 
-        // y actualizamos desde Supabase en segundo plano sin bloquear la UI.
         const cachedClients = await getCachedClients();
         const cachedPayments = await getCachedPayments();
         
+        // FASE 5: Detección de celular nuevo (caché vacía)
+        const isFirstLoad = cachedClients.length === 0;
+        
         if (isUserOnline()) {
-            // SEGURIDAD y FASE 2: Solo refrescar caché si NO hay operaciones pendientes
-            // Y además han pasado al menos 5 segundos desde la última sincronización
-            // para dar tiempo a que Supabase propague los datos.
             const pendingOps = await getPendingCount();
             const sinceSyncComplete = Date.now() - _lastSyncComplete;
             
             if (pendingOps === 0 && sinceSyncComplete > 5000) {
-                // FASE 4: Carga optimizada. Solo trae los más recientes (hasta 1000). 
-                // El caché local Append-Only retiene todo el historial antiguo sin borrarlo.
-                supabase.from('ahorros_clientes').select('*').order('id', {ascending: false}).limit(1000).then(({data}) => data && cacheClients(data.map(mapCliente)));
-                supabase.from('ahorros_pagos').select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real').order('fecha', {ascending: false}).limit(1000).then(({data}) => data && cachePayments(data));
+                if (isFirstLoad) {
+                    // CELULAR NUEVO: Carga BLOQUEANTE para que el usuario vea datos al instante
+                    console.log('[FASE5] 📱 Celular nuevo detectado: cargando datos completos desde Supabase...');
+                    const { data: remoteClients } = await supabase.from('ahorros_clientes').select('*').order('id', {ascending: false}).limit(1000);
+                    if (remoteClients && remoteClients.length > 0) {
+                        const mapped = remoteClients.map(mapCliente);
+                        await cacheClients(mapped);
+                    }
+                    await syncAllPayments();
+                } else {
+                    // CELULARES EXISTENTES: Actualización en segundo plano (rápido, no bloquea UI)
+                    supabase.from('ahorros_clientes').select('*').order('id', {ascending: false}).limit(1000).then(({data}) => data && cacheClients(data.map(mapCliente)));
+                    syncAllPayments();
+                }
             } else if (pendingOps === 0 && sinceSyncComplete <= 5000) {
                 console.log(`[FASE2] Cooldown de refresh activo (${sinceSyncComplete}ms), omitiendo fetch para proteger caché.`);
             }
         }
         
-        clients = cachedClients.length > 0 ? cachedClients : [];
-        payments = cachedPayments.length > 0 ? cachedPayments : [];
+        // Re-leer caché después de posible carga bloqueante (celular nuevo)
+        clients = isFirstLoad ? await getCachedClients() : cachedClients;
+        payments = isFirstLoad ? await getCachedPayments() : cachedPayments;
     } catch (err) {
         clients = await getCachedClients();
         payments = await getCachedPayments();
@@ -704,6 +713,116 @@ export async function getPagosByCliente(clienteId) {
     return finalPagos.sort((a, b) => b.fecha.localeCompare(a.fecha) || (b.hora || '').localeCompare(a.hora || ''));
 }
 
+/**
+ * Sincroniza todos los pagos de la nube paginados por rangos (de 1000 en 1000)
+ * para evitar el límite de PostgREST y poblar la caché local de manera íntegra.
+ */
+export async function syncAllPayments() {
+    if (!isUserOnline()) return;
+    try {
+        const pendingOps = await getPendingCount();
+        if (pendingOps > 0) return; // Si hay operaciones pendientes locales, no interrumpir caché
+
+        let allPayments = [];
+        let from = 0;
+        let to = 999;
+        let hasMore = true;
+
+        while (hasMore) {
+            const { data, error } = await supabase.from('ahorros_pagos')
+                .select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real')
+                .order('fecha', { ascending: false })
+                .range(from, to);
+
+            if (error || !data) {
+                hasMore = false;
+                break;
+            }
+
+            allPayments = allPayments.concat(data);
+            // FASE 5: Aumentado a 50000 para garantizar reconciliación completa
+            // con múltiples dispositivos y historial extenso
+            if (data.length < 1000 || allPayments.length >= 50000) {
+                hasMore = false;
+            } else {
+                from += 1000;
+                to += 1000;
+            }
+        }
+
+        if (allPayments.length > 0) {
+            await cachePayments(allPayments);
+
+            // FASE 5: Reconciliación global de pagos (Multi-Dispositivo)
+            // Paso 1: Limpiar pagos fantasma con ID 'local-xxx' que ya no son pendientes.
+            //         Estos SIEMPRE son residuos de sincronizaciones anteriores.
+            const cachedAll = await getCachedPayments();
+            const localPhantoms = cachedAll.filter(p => 
+                p.status !== 'pending' && 
+                typeof p.id === 'string' && 
+                (p.id.startsWith('local-') || p.id.startsWith('id-'))
+            );
+
+            if (localPhantoms.length > 0) {
+                const phantomIds = localPhantoms.map(p => p.id);
+                await db.payments_cache.bulkDelete(phantomIds);
+                console.log(`[syncAllPayments] 🧹 FASE 5a: Eliminados ${phantomIds.length} pagos fantasma (IDs local-xxx).`);
+            }
+
+            // Paso 2: Reconciliación por ID contra Supabase.
+            //         Eliminar cualquier pago local (no-pending) que ya no exista en la nube.
+            const remoteIds = new Set(allPayments.map(p => p.id));
+            const cachedAfterCleanup = await getCachedPayments();
+            const toDelete = cachedAfterCleanup.filter(p => 
+                p.status !== 'pending' && !remoteIds.has(p.id)
+            );
+
+            if (toDelete.length > 0) {
+                const deleteIds = toDelete.map(p => p.id);
+                await db.payments_cache.bulkDelete(deleteIds);
+                console.log(`[syncAllPayments] 🧹 FASE 5b: Reconciliación global eliminó ${deleteIds.length} pagos obsoletos.`);
+            }
+        }
+    } catch (err) {
+        console.error('[syncAllPayments] Error:', err);
+    }
+}
+
+/**
+ * Sincroniza en segundo plano todos los pagos de un cliente específico desde Supabase
+ * para garantizar consistencia total e inmediata en su vista de detalles.
+ */
+export async function syncClientPayments(clienteId) {
+    if (!isUserOnline() || !clienteId) return;
+    try {
+        const pendingOps = await getPendingCount();
+        if (pendingOps > 0) return; // Si hay operaciones locales pendientes, no sobreescribir caché
+
+        const { data, error } = await supabase.from('ahorros_pagos')
+            .select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real')
+            .eq('cliente_id', clienteId);
+            
+        if (!error && data) {
+            await cachePayments(data);
+            
+            // FASE 4 BIS: Deduplicación y limpieza cirúrgica de pagos borrados en la nube
+            // Borrar de IndexedDB cualquier pago de este cliente que ya no exista en Supabase,
+            // preservando aquellos con status === 'pending'
+            const remotePagoIds = new Set(data.map(p => p.id));
+            const cachedPagos = await db.payments_cache.where('cliente_id').equals(clienteId).toArray();
+            const toDelete = cachedPagos.filter(p => p.status !== 'pending' && !remotePagoIds.has(p.id));
+            
+            if (toDelete.length > 0) {
+                const deleteIds = toDelete.map(p => p.id);
+                await db.payments_cache.bulkDelete(deleteIds);
+                console.log(`[syncClientPayments] 🧹 Limpiados ${deleteIds.length} pagos borrados en Supabase para el cliente ${clienteId}.`);
+            }
+        }
+    } catch (err) {
+        console.error('[syncClientPayments] Error:', err);
+    }
+}
+
 export async function getTotalesByCliente(clienteId) {
     const pagos = await getPagosByCliente(clienteId);
     const n = pagos.filter(p => p.tipo === 'normal').reduce((s, p) => s + Number(p.monto), 0);
@@ -782,11 +901,16 @@ export async function deleteLugar(nombre) {
 export async function getAllPagosMerged() {
     let payments = [];
     try {
-        if (!isUserOnline()) throw new Error('Offline');
-        const { data: dbP } = await supabase.from('ahorros_pagos').select('*, fecha_pago_real').order('fecha', { ascending: false });
-        payments = dbP || [];
-        await cachePayments(payments);
-    } catch {
+        // En lugar de hacer una consulta directa a Supabase que se trunca a 1000 por límites del servidor,
+        // leemos siempre de la caché local que contiene el historial completo acumulado.
+        payments = await getCachedPayments();
+        
+        if (isUserOnline()) {
+            // Disparar sincronización paginada en segundo plano para refrescar datos nuevos
+            syncAllPayments().catch(err => console.error('[getAllPagosMerged] background sync error:', err));
+        }
+    } catch (err) {
+        console.error('[getAllPagosMerged] Error:', err);
         payments = await getCachedPayments();
     }
     const queue = await getAllQueueOps();

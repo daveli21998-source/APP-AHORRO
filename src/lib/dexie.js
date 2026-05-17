@@ -246,7 +246,7 @@ export async function getDrivePendingCount() {
 /** Guarda la lista completa de clientes en caché, PRESERVANDO datos locales pendientes */
 export async function cacheClients(clients) {
   // FASE 2: Merge inteligente en lugar de clear() + bulkPut()
-  await db.transaction('rw', db.clients_cache, async () => {
+  await db.transaction('rw', [db.clients_cache, db.payments_cache], async () => {
     // FASE 4: Merge Idempotente (Append-Only)
     // Ya no borramos los registros locales si no vienen en la respuesta de Supabase
     // porque Supabase tiene límite de paginación de 1000 registros y borraba historial.
@@ -256,6 +256,26 @@ export async function cacheClients(clients) {
       
       const remotos = clients.filter(c => !pendingIds.has(c.id));
       await db.clients_cache.bulkPut(remotos);
+
+      // FASE 4 BIS: Limpiar de la caché local los clientes que ya no existen en Supabase
+      // y no son locales pendientes (status !== 'pending')
+      const remoteIds = new Set(clients.map(c => c.id));
+      const cached = await db.clients_cache.toArray();
+      const toDelete = cached.filter(c => c.status !== 'pending' && !remoteIds.has(c.id));
+      
+      if (toDelete.length > 0) {
+        const deleteIds = toDelete.map(c => c.id);
+        await db.clients_cache.bulkDelete(deleteIds);
+        console.log(`[cacheClients] 🧹 Limpiados ${deleteIds.length} clientes obsoletos/borrados.`);
+        
+        // Limpiar pagos huérfanos asociados a esos clientes borrados
+        for (const cid of deleteIds) {
+          const orphanCount = await db.payments_cache.where('cliente_id').equals(cid).delete();
+          if (orphanCount > 0) {
+            console.log(`[cacheClients] 🧹 Limpiados ${orphanCount} pagos huérfanos del cliente eliminado ${cid}.`);
+          }
+        }
+      }
     }
   });
 }
@@ -265,13 +285,13 @@ export async function getCachedClients() {
   return db.clients_cache.toArray();
 }
 
-/** Guarda todos los pagos en caché, PRESERVANDO datos locales pendientes */
+/** Guarda todos los pagos en caché, PRESERVANDO datos locales pendientes.
+ *  NOTA: Esta función es Append/Update-only. NO limpia pagos obsoletos aquí
+ *  porque puede ser llamada con datos parciales (ej: pagos de UN solo cliente).
+ *  La limpieza global se hace en syncAllPayments() (FASE 5).
+ */
 export async function cachePayments(payments) {
-  // FASE 2: Merge inteligente en lugar de clear() + bulkPut()
   await db.transaction('rw', db.payments_cache, async () => {
-    // FASE 4: Merge Idempotente (Append-Only)
-    // Ya no borramos los pagos locales si no vienen en la respuesta, 
-    // preservando todo el historial masivo local intacto.
     if (payments && payments.length > 0) {
       const pending = await db.payments_cache.filter(p => p.status === 'pending').toArray();
       const pendingIds = new Set(pending.map(p => p.id));

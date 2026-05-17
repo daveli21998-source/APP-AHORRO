@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, MoreVertical, Trash2, Edit2, Phone, ChevronDown, Scale, Store, DollarSign, MapPin, DoorOpen, RefreshCcw } from 'lucide-react';
 import {
     getPagosByCliente, addPago, deletePago,
-    getTotalesByCliente, deleteCliente, forceSyncClientToGoogleDrive
+    getTotalesByCliente, deleteCliente, forceSyncClientToGoogleDrive,
+    syncClientPayments, isUserOnline
 } from '../db';
 import ClientCalendar from './ClientCalendar';
 import SelectionCalendar from './SelectionCalendar';
@@ -40,8 +41,18 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
     const [historialPage, setHistorialPage] = useState(1);
 
     const reload = useCallback(async () => {
+        // Cargar desde caché local de inmediato (UX instantánea)
         setPagos(await getPagosByCliente(cliente.id));
         setTotales(await getTotalesByCliente(cliente.id));
+
+        // Refrescar en segundo plano desde Supabase si está online
+        if (isUserOnline()) {
+            syncClientPayments(cliente.id).then(async () => {
+                // Al completarse la sincronización, actualizamos el estado local
+                setPagos(await getPagosByCliente(cliente.id));
+                setTotales(await getTotalesByCliente(cliente.id));
+            }).catch(err => console.error('[ClientDetail] Error al sincronizar pagos de cliente:', err));
+        }
     }, [cliente.id]);
 
     useEffect(() => { reload(); }, [reload]);
