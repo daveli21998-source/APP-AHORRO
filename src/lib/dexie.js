@@ -245,22 +245,17 @@ export async function getDrivePendingCount() {
 
 /** Guarda la lista completa de clientes en caché, PRESERVANDO datos locales pendientes */
 export async function cacheClients(clients) {
+  // FASE 2: Merge inteligente en lugar de clear() + bulkPut()
   await db.transaction('rw', db.clients_cache, async () => {
-    // CRÍTICO: Preservar clientes creados offline (status: 'pending')
-    const pending = await db.clients_cache.filter(c => c.status === 'pending').toArray();
-    await db.clients_cache.clear();
+    // FASE 4: Merge Idempotente (Append-Only)
+    // Ya no borramos los registros locales si no vienen en la respuesta de Supabase
+    // porque Supabase tiene límite de paginación de 1000 registros y borraba historial.
     if (clients && clients.length > 0) {
-      await db.clients_cache.bulkPut(clients);
-    }
-    // Restaurar pendientes que no existan ya en los datos remotos
-    for (const p of pending) {
-      const exists = await db.clients_cache.get(p.id);
-      // También verificar si el ID sin 'local-' ya existe (ya fue sincronizado)
-      const cleanId = String(p.id).replace('local-', '');
-      const existsClean = await db.clients_cache.get(cleanId);
-      if (!exists && !existsClean) {
-        await db.clients_cache.put(p);
-      }
+      const pending = await db.clients_cache.filter(c => c.status === 'pending').toArray();
+      const pendingIds = new Set(pending.map(c => c.id));
+      
+      const remotos = clients.filter(c => !pendingIds.has(c.id));
+      await db.clients_cache.bulkPut(remotos);
     }
   });
 }
@@ -272,21 +267,17 @@ export async function getCachedClients() {
 
 /** Guarda todos los pagos en caché, PRESERVANDO datos locales pendientes */
 export async function cachePayments(payments) {
+  // FASE 2: Merge inteligente en lugar de clear() + bulkPut()
   await db.transaction('rw', db.payments_cache, async () => {
-    // CRÍTICO: Preservar pagos creados offline (status: 'pending')
-    const pending = await db.payments_cache.filter(p => p.status === 'pending').toArray();
-    await db.payments_cache.clear();
+    // FASE 4: Merge Idempotente (Append-Only)
+    // Ya no borramos los pagos locales si no vienen en la respuesta, 
+    // preservando todo el historial masivo local intacto.
     if (payments && payments.length > 0) {
-      await db.payments_cache.bulkPut(payments);
-    }
-    // Restaurar pendientes que no existan ya en los datos remotos
-    for (const p of pending) {
-      const exists = await db.payments_cache.get(p.id);
-      const cleanId = String(p.id).replace('local-', '');
-      const existsClean = await db.payments_cache.get(cleanId);
-      if (!exists && !existsClean) {
-        await db.payments_cache.put(p);
-      }
+      const pending = await db.payments_cache.filter(p => p.status === 'pending').toArray();
+      const pendingIds = new Set(pending.map(p => p.id));
+      
+      const remotos = payments.filter(p => !pendingIds.has(p.id));
+      await db.payments_cache.bulkPut(remotos);
     }
   });
 }

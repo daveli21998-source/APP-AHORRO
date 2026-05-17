@@ -1,6 +1,6 @@
 const https = require('https');
 const data = JSON.stringify({ action: 'sync_all' });
-const req = https.request('https://script.google.com/macros/s/AKfycbx9VlhZUnq4ZFGkVtCywzlKBIlbuByNkVMeq9b8tW2ovb7dTvgZW_JYD4AA-vDMqMjyIQ/exec', {
+const req = https.request('https://script.google.com/macros/s/AKfycbyALovaWTucRUyfz1cVmxu0fZPMZBXcdJrM2n6sbFN5SQpmnhKe_t725A9UsMLLLiyM/exec', {
   method: 'POST',
   headers: {
     'Content-Type': 'text/plain',

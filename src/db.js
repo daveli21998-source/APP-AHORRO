@@ -14,10 +14,12 @@ import db, {
 // Re-exportar para uso externo
 export { supabase, getPendingCount, getDrivePendingCount, getRecentLogs, migrateFromLocalStorage, requeueErrors, SYNC_STATUS };
 
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxLIRhqpXmAQyPQUWy3GkSfTNuFCU9_-Zik0ZamTYbngNLcRyT4N67qZMTjhaEeoYVA/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyALovaWTucRUyfz1cVmxu0fZPMZBXcdJrM2n6sbFN5SQpmnhKe_t725A9UsMLLLiyM/exec';
 
 // Guard de sincronización (Bug 2 fix: declarado explícitamente)
 let isSyncing = false;
+// FASE 2: Tracker de última sincronización completada para cooldown
+let _lastSyncComplete = 0;
 
 // Helper para detectar conexión real
 export function isUserOnline() {
@@ -299,7 +301,7 @@ export async function syncOfflineData() {
             detail: { remaining: totalInitial, total: totalInitial, phase: 'start' } 
         }));
 
-        let loopLimit = 100; // Evitar bucles infinitos
+        let loopLimit = 1000; // FASE 4: Permitir sincronización masiva de hasta 1000 operaciones por ciclo
         let consecutiveErrors = 0;
 
         while (loopLimit > 0) {
@@ -337,15 +339,34 @@ export async function syncOfflineData() {
                     const cleanId = String(op.id_local).replace('local-', '');
                     
                     const paymentData = { ...op.data, id: cleanId, cliente_id: cleanCId };
-                    res = await supabase.from('ahorros_pagos').upsert([paymentData]);
                     
-                    if (!res?.error) {
-                        // Limpiar pago local (pending) y reemplazar con el real
-                        if (op.id_local) {
-                            await db.payments_cache.delete(op.id_local);
-                            await db.payments_cache.put({ ...paymentData });
+                    // FASE 3: Escudo Multi-Dispositivo (Deduplicación remota)
+                    // Verificar si otro celular ya guardó este mismo pago lógico
+                    const { data: existing } = await supabase.from('ahorros_pagos')
+                        .select('id')
+                        .eq('cliente_id', cleanCId)
+                        .eq('monto', paymentData.monto)
+                        .eq('fecha', paymentData.fecha)
+                        .eq('tipo', paymentData.tipo)
+                        .maybeSingle();
+
+                    if (existing) {
+                        console.warn(`[FASE3] ⛔ Pago bloqueado: Ya fue registrado por otro dispositivo (ID: ${existing.id})`);
+                        // Simulamos éxito borrando el registro pendiente local problemático
+                        if (op.id_local) await db.payments_cache.delete(op.id_local);
+                        // No lo mandamos a Excel de nuevo porque ya debería estar o se enviará con otro sync
+                    } else {
+                        res = await supabase.from('ahorros_pagos').insert([paymentData]);
+                        
+                        if (!res?.error) {
+                            // FASE 3: Corrección del bug de IndexedDB. 
+                            // No se puede hacer 'update' a una llave primaria. Se debe hacer delete + put.
+                            if (op.id_local) {
+                                await db.payments_cache.delete(op.id_local);
+                                await db.payments_cache.put({ ...paymentData });
+                            }
+                            clientsToSyncToSheets.add(cleanCId);
                         }
-                        clientsToSyncToSheets.add(cleanCId);
                     }
                 } else if (op.type === 'UPDATE_CLIENTE') {
                     res = await supabase.from('ahorros_clientes').update(op.data).eq('id', op.id_ref);
@@ -395,6 +416,8 @@ export async function syncOfflineData() {
         console.error('[Sync] Error crítico:', err);
     } finally {
         isSyncing = false;
+        // FASE 2: Registrar cuándo terminó la sincronización para el cooldown
+        _lastSyncComplete = Date.now();
         window.dispatchEvent(new CustomEvent('offline-queue-updated', { detail: { count: await getTotalPendingCount() } }));
     }
     return { synced, failed };
@@ -425,13 +448,19 @@ export async function getClientesConMetaData() {
         const cachedPayments = await getCachedPayments();
         
         if (isUserOnline()) {
-            // SEGURIDAD: Solo refrescar caché si NO hay operaciones pendientes.
-            // Si hay pendientes, Supabase aún no tiene esos datos y el refresh
-            // podría sobrescribir registros locales.
+            // SEGURIDAD y FASE 2: Solo refrescar caché si NO hay operaciones pendientes
+            // Y además han pasado al menos 5 segundos desde la última sincronización
+            // para dar tiempo a que Supabase propague los datos.
             const pendingOps = await getPendingCount();
-            if (pendingOps === 0) {
-                supabase.from('ahorros_clientes').select('*').then(({data}) => data && cacheClients(data.map(mapCliente)));
-                supabase.from('ahorros_pagos').select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real').then(({data}) => data && cachePayments(data));
+            const sinceSyncComplete = Date.now() - _lastSyncComplete;
+            
+            if (pendingOps === 0 && sinceSyncComplete > 5000) {
+                // FASE 4: Carga optimizada. Solo trae los más recientes (hasta 1000). 
+                // El caché local Append-Only retiene todo el historial antiguo sin borrarlo.
+                supabase.from('ahorros_clientes').select('*').order('id', {ascending: false}).limit(1000).then(({data}) => data && cacheClients(data.map(mapCliente)));
+                supabase.from('ahorros_pagos').select('id, cliente_id, monto, tipo, fecha, hora, fecha_pago_real').order('fecha', {ascending: false}).limit(1000).then(({data}) => data && cachePayments(data));
+            } else if (pendingOps === 0 && sinceSyncComplete <= 5000) {
+                console.log(`[FASE2] Cooldown de refresh activo (${sinceSyncComplete}ms), omitiendo fetch para proteger caché.`);
             }
         }
         
@@ -573,40 +602,77 @@ export async function updateCliente(id, data) {
     return { id, ...updates, status: 'pending' };
 }
 
-export async function addPago(data) {
-    const today = getLocalIsoDate();
-    const now = new Date();
-    const hora = now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
-    
-    // ESCUDO: Evitar duplicados exactos en el mismo minuto (Prevención de doble clic)
-    const recientes = await getPagosByCliente(data.clienteId);
-    const tipoActual = data.tipo || 'normal';
-    const duplicado = recientes.find(p => 
-        p.monto === Number(data.monto) && 
-        p.fecha === (data.fechaPersonalizada || today) && 
-        p.hora === hora &&
-        p.tipo === tipoActual
-    );
-    if (duplicado) {
-        console.warn('[Sync] Bloqueado posible pago duplicado por doble clic.');
-        return duplicado.id;
-    }
+// FASE 1: Lock anti-ejecución concurrente para addPago
+let _addPagoLock = false;
+// FASE 1: Registro de pagos recientes para deduplicación por ventana de tiempo
+const _recentPagoKeys = new Map(); // key -> timestamp
 
-    const uuid = generateId();
-    const lid = `local-${uuid}`;
-    const nuevo = { 
-        id: uuid,
-        cliente_id: data.clienteId, 
-        tipo: data.tipo || 'normal', 
-        monto: Number(data.monto), 
-        fecha: data.fechaPersonalizada || today, 
-        fecha_pago_real: today,
-        hora: hora, 
-        nota: data.nota || '' 
-    };
-    await db.payments_cache.put({ ...nuevo, id: lid, status: 'pending' });
-    await addToQueue({ type: 'INSERT_PAGO', data: nuevo, id_local: lid });
-    return { ...nuevo, id: lid, status: 'pending' };
+export async function addPago(data) {
+    // FASE 1: Bloquear ejecución concurrente (doble clic rápido)
+    if (_addPagoLock) {
+        console.warn('[FASE1-DEDUP] ⛔ addPago bloqueado: otra operación en progreso.');
+        return null;
+    }
+    _addPagoLock = true;
+
+    try {
+        const today = getLocalIsoDate();
+        const now = new Date();
+        // FASE 1: Precisión de segundos en vez de minutos
+        const hora = now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const tipoActual = data.tipo || 'normal';
+        const fechaPago = data.fechaPersonalizada || today;
+
+        // FASE 1: Ventana de deduplicación de 30 segundos
+        // Clave lógica: mismo cliente + mismo monto + misma fecha + mismo tipo
+        const dedupKey = `${data.clienteId}|${Number(data.monto)}|${fechaPago}|${tipoActual}`;
+        const lastTime = _recentPagoKeys.get(dedupKey);
+        if (lastTime && (Date.now() - lastTime) < 30000) {
+            console.warn(`[FASE1-DEDUP] ⛔ Pago bloqueado por ventana de 30s. Key: ${dedupKey}, hace ${Date.now() - lastTime}ms`);
+            return null;
+        }
+    
+        // ESCUDO ORIGINAL MEJORADO: Verificar en la base local con precisión de segundos
+        const recientes = await getPagosByCliente(data.clienteId);
+        const duplicado = recientes.find(p => 
+            p.monto === Number(data.monto) && 
+            p.fecha === fechaPago && 
+            p.hora === hora &&
+            p.tipo === tipoActual
+        );
+        if (duplicado) {
+            console.warn(`[FASE1-DEDUP] ⛔ Pago duplicado exacto encontrado en DB local. ID: ${duplicado.id}`);
+            return duplicado.id;
+        }
+
+        // Registrar en ventana de deduplicación ANTES de escribir
+        _recentPagoKeys.set(dedupKey, Date.now());
+        // Limpiar entradas viejas (>60s) para no acumular memoria
+        for (const [k, t] of _recentPagoKeys) {
+            if (Date.now() - t > 60000) _recentPagoKeys.delete(k);
+        }
+
+        const uuid = generateId();
+        const lid = `local-${uuid}`;
+        const nuevo = { 
+            id: uuid,
+            cliente_id: data.clienteId, 
+            tipo: data.tipo || 'normal', 
+            monto: Number(data.monto), 
+            fecha: fechaPago, 
+            fecha_pago_real: today,
+            hora: hora, 
+            nota: data.nota || '' 
+        };
+
+        console.log(`[FASE1-DEDUP] ✅ Pago aceptado: ${nuevo.monto} soles, cliente ${data.clienteId}, fecha ${fechaPago}, tipo ${tipoActual}, id ${lid}`);
+
+        await db.payments_cache.put({ ...nuevo, id: lid, status: 'pending' });
+        await addToQueue({ type: 'INSERT_PAGO', data: nuevo, id_local: lid });
+        return { ...nuevo, id: lid, status: 'pending' };
+    } finally {
+        _addPagoLock = false;
+    }
 }
 
 export async function deleteCliente(id) {

@@ -1,4 +1,4 @@
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwtyHuDgE_j3RHuyCB111Oyqba-B6fh4BtQQkOd7MZfmHhGfV1ZzQ3pZFyNb96E-EGvMQ/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyALovaWTucRUyfz1cVmxu0fZPMZBXcdJrM2n6sbFN5SQpmnhKe_t725A9UsMLLLiyM/exec';
 
 async function forceSyncAll() {
   console.log('🚀 Iniciando Sincronización Forzada de todos los clientes...');

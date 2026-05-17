@@ -110,23 +110,37 @@ export default function ClientDetail({ cliente, onBack, onDelete, onEdit, showTo
             }
         }
 
+        // FASE 1: setSaving INMEDIATO sin setTimeout para evitar ventana de race condition
         setSaving(true);
-        setTimeout(async () => {
-            let savedCount = 0;
+        let savedCount = 0;
 
+        try {
             for (const fechaPersonalizada of datesToSave) {
-                await addPago({ clienteId: cliente.id, tipo, monto: montoNum, fechaPersonalizada });
-                savedCount++;
+                const result = await addPago({ clienteId: cliente.id, tipo, monto: montoNum, fechaPersonalizada });
+                // FASE 1: Solo contar si addPago no bloqueó el pago como duplicado
+                if (result !== null) {
+                    savedCount++;
+                }
             }
 
             await reload();
             setMonto('');
             setSelectedQuick(null);
-            setSaving(false);
-            showToast(`${savedCount} pago${savedCount > 1 ? 's' : ''} de ${formatMoney(montoNum)} guardado ✓`, '💚');
+            
+            if (savedCount > 0) {
+                showToast(`${savedCount} pago${savedCount > 1 ? 's' : ''} de ${formatMoney(montoNum)} guardado ✓`, '💚');
+            } else {
+                showToast('Pago ya registrado (duplicado evitado)', '⚠️');
+            }
             setSelectedDates(new Set());
-        }, 80);
+        } catch (err) {
+            console.error('[FASE1] Error en handleSave:', err);
+            showToast('Error al guardar pago', '❌');
+        } finally {
+            setSaving(false);
+        }
     }
+
 
     async function handleDelPago(id) {
         // Actualización optimista: quitar de la lista de inmediato
